@@ -29,7 +29,12 @@ export type OrchestratorEvent =
 	| { type: 'image_viewing'; imageId: string; reason?: string }
 	| { type: 'design_doc_updated' }
 	| { type: 'error'; message: string }
-	| { type: 'done'; assistantText: string; imageIds: string[] };
+	| { type: 'done'; assistantText: string; imageIds: string[] }
+	| { type: 'debug_system_prompt'; prompt: string }
+	| { type: 'debug_request'; round: number; parts: unknown[]; historyLength: number }
+	| { type: 'debug_response'; round: number; text: string; functionCalls: unknown[] }
+	| { type: 'debug_tool_exec'; name: string; args: Record<string, unknown> }
+	| { type: 'debug_tool_result'; name: string; result: unknown };
 
 export type EventCallback = (event: OrchestratorEvent) => void;
 
@@ -107,11 +112,25 @@ async function executeToolCall(
 		const label = (args.label as string) || 'generated_image';
 		const prompt = args.prompt as string;
 		const aspectRatio = args.aspect_ratio as string | undefined;
+		const refIds = (args.reference_image_ids as string[] | undefined) ?? [];
 
 		onEvent({ type: 'image_generating', label });
 
 		try {
-			const imageResponse = await generateImage(apiKey, imageModel, prompt, { aspectRatio });
+			// Fetch reference images and convert to base64 for the image model.
+			const inputImages: Array<{ data: string; mimeType: string }> = [];
+			for (const refId of refIds) {
+				const img = await ops.getImage(refId);
+				if (img) {
+					const data = await blobToBase64(img.blob);
+					inputImages.push({ data, mimeType: img.mimeType });
+				}
+			}
+
+			const imageResponse = await generateImage(apiKey, imageModel, prompt, {
+				aspectRatio,
+				inputImages: inputImages.length > 0 ? inputImages : undefined
+			});
 			const blob = imageDataToBlob(imageResponse.imageData, imageResponse.mimeType);
 			const stored = await ops.storeImage(projectId, blob, label, {
 				generationContext: prompt
@@ -214,6 +233,7 @@ export async function runAgentTurn(
 	const projectImages = await ops.listProjectImages(projectId);
 
 	const systemPrompt = buildSystemPrompt(project.name, designDoc, projectImages);
+	onEvent({ type: 'debug_system_prompt', prompt: systemPrompt });
 
 	const config = {
 		systemInstruction: systemPrompt,
@@ -240,6 +260,18 @@ export async function runAgentTurn(
 	for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
 		onEvent({ type: 'thinking', text: round === 0 ? 'Thinking...' : 'Processing tool results...' });
 
+		// Summarize parts for debug (replace binary data with placeholders).
+		const debugParts = currentUserParts.map((p) => {
+			if ('inlineData' in p && p.inlineData) {
+				return { inlineData: { mimeType: p.inlineData.mimeType, data: `[${Math.ceil((p.inlineData.data?.length ?? 0) / 1024)}KB base64]` } };
+			}
+			if ('functionResponse' in p && p.functionResponse) {
+				return { functionResponse: p.functionResponse };
+			}
+			return p;
+		});
+		onEvent({ type: 'debug_request', round, parts: debugParts, historyLength: history.length });
+
 		const response = await sendMessage(
 			settings.geminiApiKey,
 			settings.textModel,
@@ -249,6 +281,13 @@ export async function runAgentTurn(
 		);
 
 		history = response.history;
+
+		onEvent({
+			type: 'debug_response',
+			round,
+			text: response.text,
+			functionCalls: response.functionCalls.map((fc) => ({ name: fc.name, args: fc.args }))
+		});
 
 		if (response.text) {
 			allAssistantText += (allAssistantText ? '\n\n' : '') + response.text;
@@ -262,6 +301,9 @@ export async function runAgentTurn(
 		const allResponseParts: Part[] = [];
 
 		for (const call of response.functionCalls) {
+			const callArgs = (call.args ?? {}) as Record<string, unknown>;
+			onEvent({ type: 'debug_tool_exec', name: call.name ?? 'unknown', args: callArgs });
+
 			const { responseParts, imageId } = await executeToolCall(
 				call,
 				projectId,
@@ -269,6 +311,19 @@ export async function runAgentTurn(
 				settings.imageModel,
 				onEvent
 			);
+
+			// Summarize tool result for debug (strip binary).
+			const debugResult = responseParts.map((p) => {
+				if ('inlineData' in p && p.inlineData) {
+					return { inlineData: { mimeType: p.inlineData.mimeType, data: '[thumbnail]' } };
+				}
+				if ('functionResponse' in p && p.functionResponse) {
+					return { functionResponse: p.functionResponse };
+				}
+				return p;
+			});
+			onEvent({ type: 'debug_tool_result', name: call.name ?? 'unknown', result: debugResult });
+
 			if (imageId) allImageIds.push(imageId);
 			allResponseParts.push(...responseParts);
 		}

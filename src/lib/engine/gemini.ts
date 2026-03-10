@@ -24,7 +24,7 @@ export const toolDeclarations: FunctionDeclaration[] = [
 	{
 		name: 'generate_image',
 		description:
-			'Generate concept art or illustration. Provide a detailed prompt describing the image and a short human-readable label.',
+			'Generate or transform an image. For new images, write a full scene prompt. For edits or transformations of existing images, pass the source image in reference_image_ids and write a short directive prompt describing what to change.',
 		parameters: {
 			type: Type.OBJECT,
 			properties: {
@@ -40,6 +40,12 @@ export const toolDeclarations: FunctionDeclaration[] = [
 					type: Type.STRING,
 					description:
 						'Aspect ratio. One of: 1:1, 2:3, 3:2, 3:4, 4:3, 9:16, 16:9, 21:9. Defaults to 1:1.'
+				},
+				reference_image_ids: {
+					type: Type.ARRAY,
+					items: { type: Type.STRING },
+					description:
+						'IDs of project images to use as visual input. Use for style reference, character consistency, image editing, or combining elements. Always pair with prompt instructions explaining how each image should be used.'
 				}
 			},
 			required: ['prompt', 'label']

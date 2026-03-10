@@ -39,6 +39,7 @@
 	let streamedEvents = $state<OrchestratorEvent[]>([]);
 	let showDesignDoc = $state(false);
 	let showImageGallery = $state(false);
+	let showDebug = $state(false);
 	let lightboxImageId = $state<string | null>(null);
 	let pendingFiles = $state<File[]>([]);
 	let isDragging = $state(false);
@@ -322,6 +323,10 @@
 					Delete Project
 				</button>
 			{/if}
+			<label class="debug-toggle">
+				<input type="checkbox" bind:checked={showDebug} />
+				Debug
+			</label>
 			<button onclick={() => { showSettings = !showSettings; }}>
 				Settings
 			</button>
@@ -503,6 +508,47 @@
 
 					{#if statusText}
 						<div class="status">{statusText}</div>
+					{/if}
+
+					{#if showDebug && streamedEvents.some((e) => e.type.startsWith('debug_'))}
+						<details class="debug-log" open>
+							<summary>Debug Log</summary>
+							{#each streamedEvents as event}
+								{#if event.type === 'debug_system_prompt'}
+									<div class="debug-entry debug-system">
+										<div class="debug-label">System Prompt</div>
+										<pre>{event.prompt}</pre>
+									</div>
+								{:else if event.type === 'debug_request'}
+									<div class="debug-entry debug-request">
+										<div class="debug-label">Request (round {event.round})</div>
+										<div class="debug-meta">History: {event.historyLength} messages</div>
+										<pre>{JSON.stringify(event.parts, null, 2)}</pre>
+									</div>
+								{:else if event.type === 'debug_response'}
+									<div class="debug-entry debug-response">
+										<div class="debug-label">Response (round {event.round})</div>
+										{#if event.text}
+											<pre class="debug-text">{event.text}</pre>
+										{/if}
+										{#if event.functionCalls.length > 0}
+											<div class="debug-label">Function Calls</div>
+											<pre>{JSON.stringify(event.functionCalls, null, 2)}</pre>
+										{/if}
+									</div>
+								{:else if event.type === 'debug_tool_exec'}
+									<div class="debug-entry debug-tool">
+										<div class="debug-label">Tool Call: {event.name}</div>
+										<pre>{JSON.stringify(event.args, null, 2)}</pre>
+									</div>
+								{:else if event.type === 'debug_tool_result'}
+									<div class="debug-entry debug-tool-result">
+										<div class="debug-label">Tool Result: {event.name}</div>
+										<pre>{JSON.stringify(event.result, null, 2)}</pre>
+									</div>
+								{/if}
+							{/each}
+						</details>
 					{/if}
 				</div>
 
@@ -1202,5 +1248,95 @@
 		font-size: 0.8rem;
 		margin-top: 0.25rem;
 		line-height: 1.4;
+	}
+
+	/* Debug toggle */
+	.debug-toggle {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		color: #888;
+		font-size: 0.8rem;
+		cursor: pointer;
+		user-select: none;
+	}
+
+	.debug-toggle input {
+		accent-color: #f5c542;
+	}
+
+	/* Debug log */
+	.debug-log {
+		background: #0d0d0d;
+		border: 1px solid #2a2a2a;
+		border-radius: 6px;
+		margin-top: 1rem;
+		font-size: 0.78rem;
+		font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+	}
+
+	.debug-log summary {
+		padding: 0.5rem 0.75rem;
+		color: #888;
+		cursor: pointer;
+		user-select: none;
+	}
+
+	.debug-log summary:hover {
+		color: #ccc;
+	}
+
+	.debug-entry {
+		border-top: 1px solid #1a1a1a;
+		padding: 0.5rem 0.75rem;
+	}
+
+	.debug-label {
+		color: #f5c542;
+		font-weight: 600;
+		margin-bottom: 0.25rem;
+		font-size: 0.72rem;
+		text-transform: uppercase;
+		letter-spacing: 0.03em;
+	}
+
+	.debug-meta {
+		color: #666;
+		font-size: 0.72rem;
+		margin-bottom: 0.25rem;
+	}
+
+	.debug-entry pre {
+		margin: 0;
+		white-space: pre-wrap;
+		word-break: break-word;
+		color: #aaa;
+		max-height: 20rem;
+		overflow-y: auto;
+		line-height: 1.4;
+	}
+
+	.debug-text {
+		color: #8cbf8c;
+	}
+
+	.debug-system {
+		border-left: 3px solid #665500;
+	}
+
+	.debug-request {
+		border-left: 3px solid #336;
+	}
+
+	.debug-response {
+		border-left: 3px solid #363;
+	}
+
+	.debug-tool {
+		border-left: 3px solid #636;
+	}
+
+	.debug-tool-result {
+		border-left: 3px solid #633;
 	}
 </style>
