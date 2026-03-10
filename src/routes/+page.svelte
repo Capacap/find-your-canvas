@@ -1,2 +1,604 @@
-<h1>Welcome to SvelteKit</h1>
-<p>Visit <a href="https://svelte.dev/docs/kit">svelte.dev/docs/kit</a> to read the documentation</p>
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import {
+		getAppState,
+		loadSettings,
+		saveSettings,
+		loadProjects,
+		selectProject,
+		createNewProject,
+		selectConversation,
+		createNewConversation,
+		refreshMessages,
+		refreshDesignDoc,
+		getImageUrl,
+		revokeImageUrls
+	} from '$lib/stores/appState.svelte';
+	import { runAgentTurn, type OrchestratorEvent } from '$lib/engine/orchestrator';
+	import type { Content } from '@google/genai';
+
+	const app = getAppState();
+
+	let userInput = $state('');
+	let statusText = $state('');
+	let isRunning = $state(false);
+	let showSettings = $state(false);
+	let apiKeyInput = $state('');
+	let newProjectName = $state('');
+	let streamedEvents = $state<OrchestratorEvent[]>([]);
+	let showDesignDoc = $state(false);
+
+	// Image URL resolution for display
+	let resolvedImageUrls = $state<Record<string, string>>({});
+
+	onMount(async () => {
+		await loadSettings();
+		await loadProjects();
+		apiKeyInput = app.settings?.geminiApiKey ?? '';
+	});
+
+	// Resolve image URLs whenever messages change (including on reload/navigation).
+	$effect(() => {
+		const msgs = app.messages;
+		const imageRefPattern = /\[image:([^\]]+)\]/g;
+		for (const msg of msgs) {
+			for (const imgId of msg.imageIds) {
+				resolveImageId(imgId);
+			}
+			let match;
+			while ((match = imageRefPattern.exec(msg.text)) !== null) {
+				resolveImageId(match[1]);
+			}
+		}
+	});
+
+	async function handleSaveSettings() {
+		await saveSettings({ geminiApiKey: apiKeyInput });
+		showSettings = false;
+	}
+
+	async function handleCreateProject() {
+		if (!newProjectName.trim()) return;
+		await createNewProject(newProjectName.trim());
+		newProjectName = '';
+	}
+
+	async function handleSelectProject(id: string) {
+		revokeImageUrls();
+		await selectProject(id);
+	}
+
+	async function handleNewConversation() {
+		await createNewConversation('New conversation');
+	}
+
+	async function resolveImageId(imageId: string) {
+		if (resolvedImageUrls[imageId]) return;
+		const url = await getImageUrl(imageId);
+		if (url) {
+			resolvedImageUrls = { ...resolvedImageUrls, [imageId]: url };
+		}
+	}
+
+	async function handleSend() {
+		if (!userInput.trim() || isRunning) return;
+		if (!app.currentProject) return;
+
+		// Auto-create a conversation if none selected.
+		if (!app.currentConversation) {
+			await handleNewConversation();
+		}
+
+		const text = userInput.trim();
+		userInput = '';
+		isRunning = true;
+		streamedEvents = [];
+		statusText = 'Thinking...';
+
+		// Build conversation history from existing messages for the LLM.
+		const history: Content[] = app.messages.map((m) => ({
+			role: m.role === 'assistant' ? 'model' : 'user',
+			parts: [{ text: m.text }]
+		}));
+
+		const onEvent = (event: OrchestratorEvent) => {
+			streamedEvents = [...streamedEvents, event];
+
+			if (event.type === 'thinking') statusText = event.text;
+			else if (event.type === 'image_generating') statusText = `Generating: ${event.label}...`;
+			else if (event.type === 'image_complete') {
+				resolveImageId(event.imageId);
+				statusText = `Generated: ${event.label}`;
+			}
+			else if (event.type === 'design_doc_updated') {
+				refreshDesignDoc();
+				statusText = 'Design document updated';
+			}
+			else if (event.type === 'error') statusText = event.message;
+			else if (event.type === 'done') statusText = '';
+		};
+
+		try {
+			await runAgentTurn(
+				app.currentProject.id,
+				app.currentConversation!.id,
+				text,
+				history,
+				onEvent
+			);
+			await refreshMessages();
+
+			// Resolve any image references in the new messages.
+			for (const msg of app.messages) {
+				for (const imgId of msg.imageIds) {
+					await resolveImageId(imgId);
+				}
+			}
+		} catch (err) {
+			statusText = `Error: ${err instanceof Error ? err.message : String(err)}`;
+		} finally {
+			isRunning = false;
+		}
+	}
+
+	function handleKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter' && !e.shiftKey) {
+			e.preventDefault();
+			handleSend();
+		}
+	}
+
+	/** Parse [image:id] references in message text and return HTML. */
+	function renderMessageText(text: string): string {
+		return text.replace(
+			/\[image:([^\]]+)\]/g,
+			(_, id) => {
+				const url = resolvedImageUrls[id];
+				if (url) return `<img src="${url}" alt="${id}" class="inline-image" />`;
+				return `[image:${id}]`;
+			}
+		);
+	}
+</script>
+
+<div class="app">
+	<header>
+		<h1>Banana Orchestra</h1>
+		<nav>
+			{#if app.currentProject}
+				<button onclick={() => { selectProject(''); revokeImageUrls(); }}>
+					&larr; Projects
+				</button>
+				<span class="project-name">{app.currentProject.name}</span>
+				<button
+					class:active-toggle={showDesignDoc}
+					onclick={() => { showDesignDoc = !showDesignDoc; }}
+				>
+					Design Doc
+				</button>
+			{/if}
+			<button onclick={() => { showSettings = !showSettings; }}>
+				Settings
+			</button>
+		</nav>
+	</header>
+
+	{#if showSettings}
+		<div class="settings-panel">
+			<h2>Settings</h2>
+			<label>
+				Gemini API Key
+				<input
+					type="password"
+					bind:value={apiKeyInput}
+					placeholder="Enter your Gemini API key"
+				/>
+			</label>
+			<div class="settings-actions">
+				<button onclick={handleSaveSettings}>Save</button>
+				<button onclick={() => { showSettings = false; }}>Cancel</button>
+			</div>
+		</div>
+	{:else if !app.currentProject}
+		<!-- Project list -->
+		<div class="project-list">
+			<div class="create-project">
+				<input
+					bind:value={newProjectName}
+					placeholder="New project name..."
+					onkeydown={(e) => e.key === 'Enter' && handleCreateProject()}
+				/>
+				<button onclick={handleCreateProject} disabled={!newProjectName.trim()}>Create</button>
+			</div>
+			{#if app.projects.length === 0}
+				<p class="empty-state">No projects yet. Create one to get started.</p>
+			{:else}
+				{#each app.projects as project}
+					<button class="project-card" onclick={() => handleSelectProject(project.id)}>
+						<strong>{project.name}</strong>
+						<span class="date">{new Date(project.updatedAt).toLocaleDateString()}</span>
+					</button>
+				{/each}
+			{/if}
+		</div>
+	{:else}
+		<!-- Project workspace -->
+		<div class="workspace">
+			<aside class="sidebar">
+				<button class="new-convo" onclick={handleNewConversation}>+ New Conversation</button>
+				{#each app.conversations as convo}
+					<button
+						class="convo-item"
+						class:active={app.currentConversation?.id === convo.id}
+						onclick={() => selectConversation(convo.id)}
+					>
+						{convo.title}
+					</button>
+				{/each}
+			</aside>
+
+			{#if showDesignDoc}
+				<aside class="design-doc-panel">
+					<h3>Design Document</h3>
+					{#if app.designDoc?.content}
+						<div class="design-doc-content">{app.designDoc.content}</div>
+					{:else}
+						<p class="empty-state">No design decisions established yet. The assistant will populate this as your project takes shape.</p>
+					{/if}
+				</aside>
+			{/if}
+
+			<main class="chat">
+				<div class="messages">
+					{#each app.messages as msg}
+						<div class="message {msg.role}">
+							<div class="message-role">{msg.role === 'user' ? 'You' : 'Assistant'}</div>
+							<div class="message-text">{@html renderMessageText(msg.text)}</div>
+							{#if msg.imageIds.length > 0}
+								<div class="message-images">
+									{#each msg.imageIds as imgId}
+										{#if resolvedImageUrls[imgId]}
+											<img src={resolvedImageUrls[imgId]} alt={imgId} class="gallery-image" />
+										{/if}
+									{/each}
+								</div>
+							{/if}
+						</div>
+					{/each}
+
+					{#if statusText}
+						<div class="status">{statusText}</div>
+					{/if}
+				</div>
+
+				<div class="input-area">
+					<textarea
+						bind:value={userInput}
+						onkeydown={handleKeydown}
+						placeholder={app.settings?.geminiApiKey ? 'Describe what you want to create...' : 'Set your API key in Settings first'}
+						disabled={isRunning || !app.settings?.geminiApiKey}
+						rows={3}
+					></textarea>
+					<button onclick={handleSend} disabled={isRunning || !userInput.trim()}>
+						{isRunning ? '...' : 'Send'}
+					</button>
+				</div>
+			</main>
+		</div>
+	{/if}
+</div>
+
+<style>
+	:global(body) {
+		margin: 0;
+		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+		background: #0a0a0a;
+		color: #e0e0e0;
+	}
+
+	.app {
+		display: flex;
+		flex-direction: column;
+		height: 100vh;
+	}
+
+	header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0.75rem 1.5rem;
+		background: #141414;
+		border-bottom: 1px solid #222;
+	}
+
+	header h1 {
+		font-size: 1.1rem;
+		margin: 0;
+		color: #f5c542;
+	}
+
+	nav {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.project-name {
+		color: #999;
+	}
+
+	button {
+		background: #1e1e1e;
+		color: #e0e0e0;
+		border: 1px solid #333;
+		padding: 0.4rem 0.8rem;
+		border-radius: 4px;
+		cursor: pointer;
+		font-size: 0.85rem;
+	}
+
+	button:hover:not(:disabled) {
+		background: #2a2a2a;
+		border-color: #444;
+	}
+
+	button:disabled {
+		opacity: 0.4;
+		cursor: default;
+	}
+
+	/* Settings */
+	.settings-panel {
+		max-width: 400px;
+		margin: 2rem auto;
+		padding: 1.5rem;
+	}
+
+	.settings-panel h2 {
+		margin-top: 0;
+	}
+
+	.settings-panel label {
+		display: block;
+		margin-bottom: 1rem;
+	}
+
+	.settings-panel input {
+		display: block;
+		width: 100%;
+		margin-top: 0.25rem;
+		padding: 0.5rem;
+		background: #1a1a1a;
+		border: 1px solid #333;
+		border-radius: 4px;
+		color: #e0e0e0;
+		box-sizing: border-box;
+	}
+
+	.settings-actions {
+		display: flex;
+		gap: 0.5rem;
+	}
+
+	/* Project list */
+	.project-list {
+		max-width: 500px;
+		margin: 2rem auto;
+		padding: 0 1rem;
+	}
+
+	.create-project {
+		display: flex;
+		gap: 0.5rem;
+		margin-bottom: 1.5rem;
+	}
+
+	.create-project input {
+		flex: 1;
+		padding: 0.5rem;
+		background: #1a1a1a;
+		border: 1px solid #333;
+		border-radius: 4px;
+		color: #e0e0e0;
+	}
+
+	.empty-state {
+		color: #666;
+		text-align: center;
+		padding: 2rem 0;
+	}
+
+	.project-card {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		width: 100%;
+		padding: 0.75rem;
+		margin-bottom: 0.5rem;
+		text-align: left;
+	}
+
+	.date {
+		color: #666;
+		font-size: 0.8rem;
+	}
+
+	/* Workspace */
+	.workspace {
+		display: flex;
+		flex: 1;
+		overflow: hidden;
+	}
+
+	.sidebar {
+		width: 220px;
+		background: #111;
+		border-right: 1px solid #222;
+		padding: 0.5rem;
+		overflow-y: auto;
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+
+	.new-convo {
+		border-color: #f5c542;
+		color: #f5c542;
+		margin-bottom: 0.5rem;
+	}
+
+	.convo-item {
+		text-align: left;
+		border: none;
+		background: transparent;
+		padding: 0.5rem;
+		border-radius: 4px;
+		color: #aaa;
+	}
+
+	.convo-item:hover {
+		background: #1a1a1a;
+		color: #e0e0e0;
+	}
+
+	.convo-item.active {
+		background: #1e1e1e;
+		color: #f5c542;
+	}
+
+	/* Design Doc Panel */
+	.design-doc-panel {
+		width: 320px;
+		background: #111;
+		border-left: 1px solid #222;
+		padding: 1rem;
+		overflow-y: auto;
+		order: 1;
+	}
+
+	.design-doc-panel h3 {
+		margin: 0 0 0.75rem;
+		font-size: 0.9rem;
+		color: #f5c542;
+	}
+
+	.design-doc-content {
+		font-size: 0.85rem;
+		line-height: 1.6;
+		white-space: pre-wrap;
+		color: #ccc;
+	}
+
+	.active-toggle {
+		border-color: #f5c542;
+		color: #f5c542;
+	}
+
+	/* Chat */
+	.chat {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+	}
+
+	.messages {
+		flex: 1;
+		overflow-y: auto;
+		padding: 1rem 1.5rem;
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+		max-width: 80ch;
+		margin: 0 auto;
+		width: 100%;
+		box-sizing: border-box;
+	}
+
+	.message {
+		max-width: 100%;
+	}
+
+	.message-role {
+		font-size: 0.75rem;
+		color: #666;
+		margin-bottom: 0.25rem;
+	}
+
+	.message-text {
+		background: #1a1a1a;
+		padding: 0.75rem 1rem;
+		border-radius: 8px;
+		line-height: 1.5;
+		white-space: pre-wrap;
+	}
+
+	.message.user .message-text {
+		background: #1a2a1a;
+	}
+
+	.message-images {
+		display: flex;
+		gap: 0.5rem;
+		margin-top: 0.5rem;
+		flex-wrap: wrap;
+	}
+
+	:global(.inline-image) {
+		max-width: 300px;
+		max-height: 300px;
+		border-radius: 6px;
+		display: block;
+		margin: 0.5rem 0;
+	}
+
+	.gallery-image {
+		max-width: 300px;
+		max-height: 300px;
+		border-radius: 6px;
+	}
+
+	.status {
+		color: #f5c542;
+		font-size: 0.85rem;
+		padding: 0.5rem;
+	}
+
+	.input-area {
+		display: flex;
+		gap: 0.5rem;
+		padding: 0.75rem 1.5rem;
+		border-top: 1px solid #222;
+		background: #111;
+	}
+
+	.input-area textarea {
+		flex: 1;
+		resize: none;
+		padding: 0.5rem;
+		background: #1a1a1a;
+		border: 1px solid #333;
+		border-radius: 6px;
+		color: #e0e0e0;
+		font-family: inherit;
+		font-size: 0.9rem;
+	}
+
+	.input-area textarea:focus {
+		outline: none;
+		border-color: #f5c542;
+	}
+
+	.input-area button {
+		align-self: flex-end;
+		padding: 0.5rem 1.5rem;
+		background: #f5c542;
+		color: #0a0a0a;
+		border: none;
+		font-weight: 600;
+	}
+
+	.input-area button:hover:not(:disabled) {
+		background: #f0b820;
+	}
+</style>
