@@ -10,6 +10,7 @@ let currentConversation = $state<Conversation | null>(null);
 let projects = $state<Project[]>([]);
 let conversations = $state<Conversation[]>([]);
 let messages = $state<Message[]>([]);
+let projectImages = $state<StoredImage[]>([]);
 let designDoc = $state<DesignDocument | null>(null);
 let settings = $state<Settings | null>(null);
 let isLoading = $state(false);
@@ -25,6 +26,7 @@ export function getAppState() {
 		get projects() { return projects; },
 		get conversations() { return conversations; },
 		get messages() { return messages; },
+		get projectImages() { return projectImages; },
 		get settings() { return settings; },
 		get isLoading() { return isLoading; },
 		set isLoading(v: boolean) { isLoading = v; }
@@ -51,8 +53,10 @@ export async function selectProject(id: string): Promise<void> {
 	if (currentProject) {
 		conversations = await ops.listConversations(id);
 		designDoc = (await ops.getDesignDocument(id)) ?? null;
+		projectImages = await ops.listProjectImages(id);
 	} else {
 		designDoc = null;
+		projectImages = [];
 	}
 }
 
@@ -92,6 +96,12 @@ export async function refreshMessages(): Promise<void> {
 export async function refreshDesignDoc(): Promise<void> {
 	if (currentProject) {
 		designDoc = (await ops.getDesignDocument(currentProject.id)) ?? null;
+	}
+}
+
+export async function refreshProjectImages(): Promise<void> {
+	if (currentProject) {
+		projectImages = await ops.listProjectImages(currentProject.id);
 	}
 }
 

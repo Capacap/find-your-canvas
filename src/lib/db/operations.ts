@@ -4,6 +4,7 @@
  */
 import { db } from './database';
 import { DEFAULT_SETTINGS } from '$lib/types/schema';
+import { createThumbnail } from './thumbnail';
 import type {
 	Project,
 	DesignDocument,
@@ -190,11 +191,13 @@ export async function storeImage(
 		generationContext?: string;
 	} = {}
 ): Promise<StoredImage> {
+	const thumbnail = await createThumbnail(blob);
 	const image: StoredImage = {
 		id: generateId(),
 		projectId,
 		messageId: options.messageId,
 		blob,
+		thumbnail,
 		mimeType: options.mimeType ?? blob.type ?? 'image/png',
 		width: options.width,
 		height: options.height,
@@ -224,4 +227,34 @@ export async function deleteImage(id: string): Promise<void> {
  */
 export function imageToObjectUrl(image: StoredImage): string {
 	return URL.createObjectURL(image.blob);
+}
+
+/**
+ * Get the thumbnail for an image as a base64 string.
+ * Backfills the thumbnail if the image was stored before v2.
+ */
+export async function getImageThumbnailBase64(imageId: string): Promise<{ base64: string; mimeType: string } | undefined> {
+	const image = await db.images.get(imageId);
+	if (!image) return undefined;
+
+	// Backfill thumbnail for v1 images that don't have one.
+	if (!image.thumbnail) {
+		image.thumbnail = await createThumbnail(image.blob);
+		await db.images.update(imageId, { thumbnail: image.thumbnail });
+	}
+
+	const base64 = await blobToBase64String(image.thumbnail);
+	return { base64, mimeType: 'image/jpeg' };
+}
+
+function blobToBase64String(blob: Blob): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => {
+			const result = reader.result as string;
+			resolve(result.split(',')[1]);
+		};
+		reader.onerror = reject;
+		reader.readAsDataURL(blob);
+	});
 }

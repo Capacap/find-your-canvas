@@ -1,0 +1,2 @@
+## Design Document
+No decisions established yet. As we work together, I will build a design document capturing key decisions about style, characters, settings, and other elements.

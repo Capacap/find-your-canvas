@@ -27,6 +27,10 @@ class BananaDB extends Dexie {
 			images: 'id, projectId, messageId',
 			settings: 'id'
 		});
+
+		// v2: adds thumbnail field to images (not indexed, no store change needed).
+		// Existing images will have thumbnail backfilled on first access.
+		this.version(2).stores({});
 	}
 }
 

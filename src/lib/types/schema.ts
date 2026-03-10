@@ -61,6 +61,8 @@ export interface StoredImage {
 	/** The message that produced this image, if any. */
 	messageId?: string;
 	blob: Blob;
+	/** Downscaled version (max 512px) for sending to the model as context. */
+	thumbnail: Blob;
 	mimeType: string;
 	width?: number;
 	height?: number;

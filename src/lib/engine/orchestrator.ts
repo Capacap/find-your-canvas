@@ -3,16 +3,21 @@
  *
  * Manages the agent turn loop:
  * 1. Build system prompt with project context
- * 2. Send user message to the LLM
- * 3. Parse the response for tool calls
- * 4. Execute tools (image generation, design doc updates)
- * 5. Feed results back and repeat if needed
- * 6. Yield final response to the UI
+ * 2. Send user message to the LLM with native function declarations
+ * 3. If the model returns function calls, execute them
+ * 4. Feed function results back and repeat if needed
+ * 5. Yield final response to the UI
  */
-import type { Content, Part } from '@google/genai';
+import type { Content, FunctionCall, Part } from '@google/genai';
 import type { DesignDocument, StoredImage } from '$lib/types/schema';
-import { sendTextMessage, generateImage, imageDataToBlob, blobToBase64 } from './gemini';
-import { getSettings } from '$lib/db/operations';
+import { sendMessage, generateImage, imageDataToBlob, toolDeclarations } from './gemini';
+import {
+	systemTemplate,
+	designDocFullTemplate,
+	designDocEmptyTemplate,
+	interpolate
+} from './prompts';
+import { getSettings, getImageThumbnailBase64 } from '$lib/db/operations';
 import * as ops from '$lib/db/operations';
 
 /** What the orchestrator emits to the UI as it works. */
@@ -21,6 +26,7 @@ export type OrchestratorEvent =
 	| { type: 'text'; text: string }
 	| { type: 'image_generating'; label: string }
 	| { type: 'image_complete'; imageId: string; label: string }
+	| { type: 'image_viewing'; imageId: string; reason?: string }
 	| { type: 'design_doc_updated' }
 	| { type: 'error'; message: string }
 	| { type: 'done'; assistantText: string; imageIds: string[] };
@@ -35,89 +41,129 @@ const MAX_TOOL_ROUNDS = 5;
 function buildSystemPrompt(
 	projectName: string,
 	designDoc: DesignDocument | undefined,
-	recentImages: StoredImage[]
+	projectImages: StoredImage[]
 ): string {
-	const parts: string[] = [];
+	const designDocSection =
+		designDoc?.content
+			? interpolate(designDocFullTemplate, { content: designDoc.content })
+			: designDocEmptyTemplate;
 
-	parts.push(`You are a creative assistant working on a project called "${projectName}".`);
-	parts.push('You help the user develop visual concepts, maintain creative continuity, and generate images that fit within the established project context.');
-	parts.push('');
-
-	if (designDoc?.content) {
-		parts.push('## Design Document (established decisions)');
-		parts.push(designDoc.content);
-		parts.push('');
-	} else {
-		parts.push('## Design Document');
-		parts.push('No decisions established yet. As we work together, I will build a design document capturing key decisions about style, characters, settings, and other elements.');
-		parts.push('');
-	}
-
-	if (recentImages.length > 0) {
-		parts.push('## Recent Images');
-		for (const img of recentImages.slice(-10)) {
-			const ctx = img.generationContext ? ` (context: ${img.generationContext})` : '';
-			parts.push(`- [image:${img.id}] "${img.label}"${ctx}`);
+	let imageIndexSection = '';
+	if (projectImages.length > 0) {
+		const lines = ['## Project Images', 'Use view_image to see any of these.', ''];
+		for (const img of projectImages) {
+			const desc = img.generationContext
+				? ` — ${img.generationContext.slice(0, 120)}${img.generationContext.length > 120 ? '...' : ''}`
+				: '';
+			lines.push(`- **${img.label}** (id: ${img.id})${desc}`);
 		}
-		parts.push('');
+		imageIndexSection = lines.join('\n');
 	}
 
-	parts.push('## Tools');
-	parts.push('You have access to the following tools. Use them by responding with a JSON tool call block:');
-	parts.push('');
-	parts.push('### generate_image');
-	parts.push('Generate concept art. Provide a detailed prompt and a short label.');
-	parts.push('```json');
-	parts.push('{"tool": "generate_image", "prompt": "detailed image prompt...", "label": "short_label", "aspect_ratio": "16:9"}');
-	parts.push('```');
-	parts.push('Supported aspect ratios: 1:1, 2:3, 3:2, 3:4, 4:3, 9:16, 16:9, 21:9');
-	parts.push('');
-	parts.push('### update_design_doc');
-	parts.push('Update the design document with new decisions. Provide the full updated content.');
-	parts.push('```json');
-	parts.push('{"tool": "update_design_doc", "content": "full updated design document..."}');
-	parts.push('```');
-	parts.push('');
-	parts.push('## Guidelines');
-	parts.push('- Reference existing images by their ID when discussing them: [image:id]');
-	parts.push('- When generating images, write prompts that incorporate established project context.');
-	parts.push('- Update the design document when new creative decisions are made.');
-	parts.push('- Think about continuity: characters should look consistent, settings should match.');
-	parts.push('- You can generate multiple images and update the design doc in one response.');
-	parts.push('- Explain your creative reasoning. The user wants to understand your thinking.');
-
-	return parts.join('\n');
+	return interpolate(systemTemplate, {
+		projectName,
+		designDocSection,
+		imageIndexSection
+	});
 }
 
-// ── Tool parsing ──
+// ── Tool execution ──
 
-interface ToolCall {
-	tool: string;
-	[key: string]: unknown;
+interface ToolExecResult {
+	/** Parts to send back as the function response. */
+	responseParts: Part[];
+	/** If this tool call produced a new image, its ID. */
+	imageId?: string;
 }
 
-/**
- * Extract tool call JSON blocks from the model's response text.
- * Looks for ```json blocks containing a "tool" field.
- */
-function extractToolCalls(text: string): { cleanText: string; toolCalls: ToolCall[] } {
-	const toolCalls: ToolCall[] = [];
-	const jsonBlockPattern = /```json\s*\n([\s\S]*?)\n```/g;
+async function executeToolCall(
+	call: FunctionCall,
+	projectId: string,
+	apiKey: string,
+	imageModel: string,
+	onEvent: EventCallback
+): Promise<ToolExecResult> {
+	const args = call.args ?? {};
+	const name = call.name ?? 'unknown';
 
-	const cleanText = text.replace(jsonBlockPattern, (_, jsonStr) => {
+	if (name === 'generate_image') {
+		const label = (args.label as string) || 'generated_image';
+		const prompt = args.prompt as string;
+		const aspectRatio = args.aspect_ratio as string | undefined;
+
+		onEvent({ type: 'image_generating', label });
+
 		try {
-			const parsed = JSON.parse(jsonStr.trim());
-			if (parsed && typeof parsed.tool === 'string') {
-				toolCalls.push(parsed as ToolCall);
-				return ''; // Remove tool call block from visible text
-			}
-		} catch {
-			// Not valid JSON or not a tool call; leave it in the text.
-		}
-		return _;
-	}).trim();
+			const imageResponse = await generateImage(apiKey, imageModel, prompt, { aspectRatio });
+			const blob = imageDataToBlob(imageResponse.imageData, imageResponse.mimeType);
+			const stored = await ops.storeImage(projectId, blob, label, {
+				generationContext: prompt
+			});
 
-	return { cleanText, toolCalls };
+			onEvent({ type: 'image_complete', imageId: stored.id, label });
+
+			// Return the thumbnail so the model can see what was generated.
+			const thumb = await getImageThumbnailBase64(stored.id);
+			const parts: Part[] = [
+				{
+					functionResponse: {
+						name,
+						response: { output: `Image generated: [image:${stored.id}] "${label}"` }
+					}
+				}
+			];
+			if (thumb) {
+				parts.push({ inlineData: { data: thumb.base64, mimeType: thumb.mimeType } });
+			}
+			return { responseParts: parts, imageId: stored.id };
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			onEvent({ type: 'error', message: `Image generation failed: ${msg}` });
+			return {
+				responseParts: [{ functionResponse: { name, response: { error: msg } } }]
+			};
+		}
+	}
+
+	if (name === 'view_image') {
+		const imageId = args.image_id as string;
+		const reason = args.reason as string | undefined;
+
+		onEvent({ type: 'image_viewing', imageId, reason });
+
+		const thumb = await getImageThumbnailBase64(imageId);
+		if (!thumb) {
+			return {
+				responseParts: [
+					{ functionResponse: { name, response: { error: `Image not found: ${imageId}` } } }
+				]
+			};
+		}
+
+		return {
+			responseParts: [
+				{ functionResponse: { name, response: { output: `Showing image ${imageId}` } } },
+				{ inlineData: { data: thumb.base64, mimeType: thumb.mimeType } }
+			]
+		};
+	}
+
+	if (name === 'update_design_doc') {
+		const content = args.content as string;
+		await ops.updateDesignDocument(projectId, content);
+		onEvent({ type: 'design_doc_updated' });
+		return {
+			responseParts: [
+				{ functionResponse: { name, response: { output: 'Design document updated successfully.' } } }
+			]
+		};
+	}
+
+	return {
+		responseParts: [
+			{ functionResponse: { name, response: { error: `Unknown tool: ${name}` } } }
+		]
+	};
 }
 
 // ── Main orchestration loop ──
@@ -146,6 +192,11 @@ export async function runAgentTurn(
 
 	const systemPrompt = buildSystemPrompt(project.name, designDoc, projectImages);
 
+	const config = {
+		systemInstruction: systemPrompt,
+		tools: [{ functionDeclarations: toolDeclarations }]
+	};
+
 	let history = [...conversationHistory];
 	let currentUserParts: Part[] = [{ text: userText }];
 	let allAssistantText = '';
@@ -154,11 +205,7 @@ export async function runAgentTurn(
 	for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
 		onEvent({ type: 'thinking', text: round === 0 ? 'Thinking...' : 'Processing tool results...' });
 
-		const config = {
-			systemInstruction: systemPrompt
-		};
-
-		const response = await sendTextMessage(
+		const response = await sendMessage(
 			settings.geminiApiKey,
 			settings.textModel,
 			currentUserParts,
@@ -168,60 +215,31 @@ export async function runAgentTurn(
 
 		history = response.history;
 
-		const { cleanText, toolCalls } = extractToolCalls(response.text);
-
-		if (cleanText) {
-			allAssistantText += (allAssistantText ? '\n\n' : '') + cleanText;
-			onEvent({ type: 'text', text: cleanText });
+		if (response.text) {
+			allAssistantText += (allAssistantText ? '\n\n' : '') + response.text;
+			onEvent({ type: 'text', text: response.text });
 		}
 
-		// No tool calls means the agent is done.
-		if (toolCalls.length === 0) break;
+		// No function calls means the agent is done.
+		if (response.functionCalls.length === 0) break;
 
-		// Execute tool calls.
-		const toolResults: string[] = [];
+		// Execute function calls and collect response parts.
+		const allResponseParts: Part[] = [];
 
-		for (const call of toolCalls) {
-			if (call.tool === 'generate_image') {
-				const label = (call.label as string) || 'generated_image';
-				const prompt = call.prompt as string;
-				const aspectRatio = call.aspect_ratio as string | undefined;
-
-				onEvent({ type: 'image_generating', label });
-
-				try {
-					const imageResponse = await generateImage(
-						settings.geminiApiKey,
-						settings.imageModel,
-						prompt,
-						{ aspectRatio }
-					);
-
-					const blob = imageDataToBlob(imageResponse.imageData, imageResponse.mimeType);
-					const stored = await ops.storeImage(projectId, blob, label, {
-						generationContext: prompt
-					});
-
-					allImageIds.push(stored.id);
-					onEvent({ type: 'image_complete', imageId: stored.id, label });
-					toolResults.push(`Image generated successfully: [image:${stored.id}] "${label}"`);
-				} catch (err) {
-					const msg = err instanceof Error ? err.message : String(err);
-					toolResults.push(`Image generation failed: ${msg}`);
-					onEvent({ type: 'error', message: `Image generation failed: ${msg}` });
-				}
-			} else if (call.tool === 'update_design_doc') {
-				const content = call.content as string;
-				await ops.updateDesignDocument(projectId, content);
-				onEvent({ type: 'design_doc_updated' });
-				toolResults.push('Design document updated successfully.');
-			} else {
-				toolResults.push(`Unknown tool: ${call.tool}`);
-			}
+		for (const call of response.functionCalls) {
+			const { responseParts, imageId } = await executeToolCall(
+				call,
+				projectId,
+				settings.geminiApiKey,
+				settings.imageModel,
+				onEvent
+			);
+			if (imageId) allImageIds.push(imageId);
+			allResponseParts.push(...responseParts);
 		}
 
-		// Feed tool results back as the next user message for the loop.
-		currentUserParts = [{ text: 'Tool results:\n' + toolResults.join('\n') }];
+		// Feed function results (and any inline images) back as the next message.
+		currentUserParts = allResponseParts;
 	}
 
 	// Store the final assistant message.

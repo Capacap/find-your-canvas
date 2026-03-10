@@ -11,6 +11,7 @@
 		createNewConversation,
 		refreshMessages,
 		refreshDesignDoc,
+		refreshProjectImages,
 		getImageUrl,
 		revokeImageUrls
 	} from '$lib/stores/appState.svelte';
@@ -27,6 +28,8 @@
 	let newProjectName = $state('');
 	let streamedEvents = $state<OrchestratorEvent[]>([]);
 	let showDesignDoc = $state(false);
+	let showImageGallery = $state(false);
+	let lightboxImageId = $state<string | null>(null);
 
 	// Image URL resolution for display
 	let resolvedImageUrls = $state<Record<string, string>>({});
@@ -49,6 +52,13 @@
 			while ((match = imageRefPattern.exec(msg.text)) !== null) {
 				resolveImageId(match[1]);
 			}
+		}
+	});
+
+	// Resolve image URLs for project images when they change.
+	$effect(() => {
+		for (const img of app.projectImages) {
+			resolveImageId(img.id);
 		}
 	});
 
@@ -127,6 +137,7 @@
 				onEvent
 			);
 			await refreshMessages();
+			await refreshProjectImages();
 
 			// Resolve any image references in the new messages.
 			for (const msg of app.messages) {
@@ -154,10 +165,29 @@
 			/\[image:([^\]]+)\]/g,
 			(_, id) => {
 				const url = resolvedImageUrls[id];
-				if (url) return `<img src="${url}" alt="${id}" class="inline-image" />`;
+				if (url) return `<img src="${url}" alt="${id}" class="inline-image" data-image-id="${id}" />`;
 				return `[image:${id}]`;
 			}
 		);
+	}
+
+	function openLightbox(imageId: string) {
+		lightboxImageId = imageId;
+	}
+
+	function closeLightbox() {
+		lightboxImageId = null;
+	}
+
+	function handleMessageClick(e: MouseEvent) {
+		const target = e.target as HTMLElement;
+		if (target.tagName === 'IMG' && target.dataset.imageId) {
+			openLightbox(target.dataset.imageId);
+		}
+	}
+
+	function handleLightboxKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') closeLightbox();
 	}
 </script>
 
@@ -172,9 +202,15 @@
 				<span class="project-name">{app.currentProject.name}</span>
 				<button
 					class:active-toggle={showDesignDoc}
-					onclick={() => { showDesignDoc = !showDesignDoc; }}
+					onclick={() => { showDesignDoc = !showDesignDoc; showImageGallery = false; }}
 				>
 					Design Doc
+				</button>
+				<button
+					class:active-toggle={showImageGallery}
+					onclick={() => { showImageGallery = !showImageGallery; showDesignDoc = false; }}
+				>
+					Images{app.projectImages.length > 0 ? ` (${app.projectImages.length})` : ''}
 				</button>
 			{/if}
 			<button onclick={() => { showSettings = !showSettings; }}>
@@ -238,7 +274,7 @@
 			</aside>
 
 			{#if showDesignDoc}
-				<aside class="design-doc-panel">
+				<aside class="side-panel">
 					<h3>Design Document</h3>
 					{#if app.designDoc?.content}
 						<div class="design-doc-content">{app.designDoc.content}</div>
@@ -248,17 +284,45 @@
 				</aside>
 			{/if}
 
+			{#if showImageGallery}
+				<aside class="side-panel">
+					<h3>Project Images</h3>
+					{#if app.projectImages.length === 0}
+						<p class="empty-state">No images yet. Ask the assistant to generate some.</p>
+					{:else}
+						<div class="image-gallery">
+							{#each app.projectImages as img}
+								<button
+									class="gallery-thumb"
+									onclick={() => openLightbox(img.id)}
+									title={img.label}
+								>
+									{#if resolvedImageUrls[img.id]}
+										<img src={resolvedImageUrls[img.id]} alt={img.label} />
+									{/if}
+									<span class="gallery-label">{img.label}</span>
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</aside>
+			{/if}
+
 			<main class="chat">
 				<div class="messages">
 					{#each app.messages as msg}
-						<div class="message {msg.role}">
+						<!-- svelte-ignore a11y_click_events_have_key_events -->
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<div class="message {msg.role}" onclick={handleMessageClick}>
 							<div class="message-role">{msg.role === 'user' ? 'You' : 'Assistant'}</div>
 							<div class="message-text">{@html renderMessageText(msg.text)}</div>
 							{#if msg.imageIds.length > 0}
 								<div class="message-images">
 									{#each msg.imageIds as imgId}
 										{#if resolvedImageUrls[imgId]}
-											<img src={resolvedImageUrls[imgId]} alt={imgId} class="gallery-image" />
+											<button class="image-button" onclick={() => openLightbox(imgId)}>
+												<img src={resolvedImageUrls[imgId]} alt={imgId} class="gallery-image" />
+											</button>
 										{/if}
 									{/each}
 								</div>
@@ -287,6 +351,28 @@
 		</div>
 	{/if}
 </div>
+
+{#if lightboxImageId && resolvedImageUrls[lightboxImageId]}
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div class="lightbox" onclick={closeLightbox} onkeydown={handleLightboxKeydown}>
+		<button class="lightbox-close" onclick={closeLightbox}>&times;</button>
+		<!-- svelte-ignore a11y_click_events_have_key_events -->
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="lightbox-content" onclick={(e) => e.stopPropagation()}>
+			<img src={resolvedImageUrls[lightboxImageId]} alt="Full size preview" />
+			{#each app.projectImages as img}
+				{#if img.id === lightboxImageId}
+					<div class="lightbox-info">
+						<span class="lightbox-label">{img.label}</span>
+						{#if img.generationContext}
+							<span class="lightbox-context">{img.generationContext}</span>
+						{/if}
+					</div>
+				{/if}
+			{/each}
+		</div>
+	</div>
+{/if}
 
 <style>
 	:global(body) {
@@ -466,8 +552,8 @@
 		color: #f5c542;
 	}
 
-	/* Design Doc Panel */
-	.design-doc-panel {
+	/* Side Panels (Design Doc, Image Gallery) */
+	.side-panel {
 		width: 320px;
 		background: #111;
 		border-left: 1px solid #222;
@@ -476,7 +562,7 @@
 		order: 1;
 	}
 
-	.design-doc-panel h3 {
+	.side-panel h3 {
 		margin: 0 0 0.75rem;
 		font-size: 0.9rem;
 		color: #f5c542;
@@ -492,6 +578,58 @@
 	.active-toggle {
 		border-color: #f5c542;
 		color: #f5c542;
+	}
+
+	/* Image Gallery */
+	.image-gallery {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 0.5rem;
+	}
+
+	.gallery-thumb {
+		background: none;
+		border: 1px solid #333;
+		border-radius: 6px;
+		padding: 0;
+		cursor: pointer;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.gallery-thumb:hover {
+		border-color: #f5c542;
+	}
+
+	.gallery-thumb img {
+		width: 100%;
+		aspect-ratio: 1;
+		object-fit: cover;
+		display: block;
+	}
+
+	.gallery-label {
+		font-size: 0.7rem;
+		color: #aaa;
+		padding: 0.25rem 0.4rem;
+		text-align: center;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.image-button {
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+		border-radius: 6px;
+		overflow: hidden;
+	}
+
+	.image-button:hover {
+		outline: 2px solid #f5c542;
 	}
 
 	/* Chat */
@@ -600,5 +738,72 @@
 
 	.input-area button:hover:not(:disabled) {
 		background: #f0b820;
+	}
+
+	/* Lightbox */
+	:global(.lightbox) {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.9);
+		z-index: 100;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		cursor: pointer;
+	}
+
+	:global(.lightbox-close) {
+		position: absolute;
+		top: 1rem;
+		right: 1rem;
+		background: none;
+		border: none;
+		color: #fff;
+		font-size: 2rem;
+		cursor: pointer;
+		z-index: 101;
+		line-height: 1;
+		padding: 0.25rem 0.5rem;
+	}
+
+	:global(.lightbox-close:hover) {
+		color: #f5c542;
+	}
+
+	:global(.lightbox-content) {
+		cursor: default;
+		max-width: 90vw;
+		max-height: 90vh;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+	}
+
+	:global(.lightbox-content img) {
+		max-width: 90vw;
+		max-height: 80vh;
+		object-fit: contain;
+		border-radius: 4px;
+	}
+
+	:global(.lightbox-info) {
+		margin-top: 0.75rem;
+		text-align: center;
+		max-width: 60ch;
+	}
+
+	:global(.lightbox-label) {
+		display: block;
+		color: #fff;
+		font-size: 0.95rem;
+		font-weight: 600;
+	}
+
+	:global(.lightbox-context) {
+		display: block;
+		color: #999;
+		font-size: 0.8rem;
+		margin-top: 0.25rem;
+		line-height: 1.4;
 	}
 </style>

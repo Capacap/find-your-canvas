@@ -6,19 +6,82 @@
  * - Don't set responseModalities; image models return images by default
  * - Input MIME types: png, jpeg, webp, heic, heif (no gif)
  */
-import { GoogleGenAI, type Chat, type Content, type GenerateContentConfig, type Part } from '@google/genai';
+import {
+	GoogleGenAI,
+	Type,
+	type Chat,
+	type Content,
+	type FunctionCall,
+	type FunctionDeclaration,
+	type GenerateContentConfig,
+	type GenerateContentResponse,
+	type Part
+} from '@google/genai';
 
-export interface GeminiTextResponse {
-	text: string;
-	history: Content[];
-}
+// ── Tool declarations for native function calling ──
 
-export interface GeminiImageResponse {
-	text: string;
-	imageData: Uint8Array;
-	mimeType: string;
-	history: Content[];
-}
+export const toolDeclarations: FunctionDeclaration[] = [
+	{
+		name: 'generate_image',
+		description:
+			'Generate concept art or illustration. Provide a detailed prompt describing the image and a short human-readable label.',
+		parameters: {
+			type: Type.OBJECT,
+			properties: {
+				prompt: {
+					type: Type.STRING,
+					description: 'Detailed image generation prompt incorporating project context.'
+				},
+				label: {
+					type: Type.STRING,
+					description: 'Short human-readable label for the image (e.g. "forest_clearing").'
+				},
+				aspect_ratio: {
+					type: Type.STRING,
+					description:
+						'Aspect ratio. One of: 1:1, 2:3, 3:2, 3:4, 4:3, 9:16, 16:9, 21:9. Defaults to 1:1.'
+				}
+			},
+			required: ['prompt', 'label']
+		}
+	},
+	{
+		name: 'view_image',
+		description:
+			'View a project image by its ID. Returns the image so you can see its contents. Use this when you need to reference, compare, or iterate on a previous image.',
+		parameters: {
+			type: Type.OBJECT,
+			properties: {
+				image_id: {
+					type: Type.STRING,
+					description: 'The ID of the image to view (from the project images index).'
+				},
+				reason: {
+					type: Type.STRING,
+					description: 'Brief note on why you need to see this image (helps the user follow your thinking).'
+				}
+			},
+			required: ['image_id']
+		}
+	},
+	{
+		name: 'update_design_doc',
+		description:
+			'Update the project design document with new creative decisions. Provide the full updated content (replaces existing).',
+		parameters: {
+			type: Type.OBJECT,
+			properties: {
+				content: {
+					type: Type.STRING,
+					description: 'The full updated design document content in markdown.'
+				}
+			},
+			required: ['content']
+		}
+	}
+];
+
+// ── Client singleton ──
 
 let clientInstance: GoogleGenAI | null = null;
 let currentApiKey: string | null = null;
@@ -30,17 +93,45 @@ function getClient(apiKey: string): GoogleGenAI {
 	return clientInstance;
 }
 
+// ── Response parsing helpers ──
+
+export interface ParsedTextResponse {
+	text: string;
+	functionCalls: FunctionCall[];
+	history: Content[];
+}
+
+/** Extract text and function calls from a Gemini response. */
+function parseResponse(response: GenerateContentResponse): { text: string; functionCalls: FunctionCall[] } {
+	let text = '';
+	const functionCalls: FunctionCall[] = [];
+
+	if (response.candidates?.[0]?.content?.parts) {
+		for (const part of response.candidates[0].content.parts) {
+			if (part.text && !part.thought) {
+				text += part.text;
+			} else if (part.functionCall) {
+				functionCalls.push(part.functionCall);
+			}
+		}
+	}
+
+	return { text, functionCalls };
+}
+
+// ── Text / orchestration messaging ──
+
 /**
- * Send a text message to the LLM for reasoning/orchestration.
- * Returns the text response and updated conversation history.
+ * Send a message to the LLM for reasoning/orchestration.
+ * Returns text, any function calls the model wants to make, and updated history.
  */
-export async function sendTextMessage(
+export async function sendMessage(
 	apiKey: string,
 	modelId: string,
 	userParts: Part[],
 	history: Content[] = [],
 	config?: GenerateContentConfig
-): Promise<GeminiTextResponse> {
+): Promise<ParsedTextResponse> {
 	const client = getClient(apiKey);
 	const chat: Chat = client.chats.create({
 		model: modelId,
@@ -49,29 +140,31 @@ export async function sendTextMessage(
 	});
 
 	const response = await chat.sendMessage({ message: userParts });
-
-	let text = '';
-	if (response.candidates?.[0]?.content?.parts) {
-		for (const part of response.candidates[0].content.parts) {
-			if (part.text && !part.thought) {
-				text += part.text;
-			}
-		}
-	}
+	const parsed = parseResponse(response);
 
 	return {
-		text,
-		history: chat.getHistory ? await chat.getHistory() : [
-			...history,
-			{ role: 'user', parts: userParts },
-			{ role: 'model', parts: [{ text }] }
-		]
+		...parsed,
+		history: chat.getHistory
+			? await chat.getHistory()
+			: [
+					...history,
+					{ role: 'user', parts: userParts },
+					{ role: 'model', parts: response.candidates?.[0]?.content?.parts ?? [{ text: parsed.text }] }
+				]
 	};
+}
+
+// ── Image generation (unchanged, no function calling needed here) ──
+
+export interface GeminiImageResponse {
+	text: string;
+	imageData: Uint8Array;
+	mimeType: string;
+	history: Content[];
 }
 
 /**
  * Generate an image using a Gemini image model.
- * Returns the image data, any text commentary, and updated history.
  */
 export async function generateImage(
 	apiKey: string,
@@ -137,13 +230,17 @@ export async function generateImage(
 		text,
 		imageData,
 		mimeType,
-		history: chat.getHistory ? await chat.getHistory() : [
-			...( options.history ?? []),
-			{ role: 'user', parts },
-			{ role: 'model', parts: response.candidates?.[0]?.content?.parts ?? [] }
-		]
+		history: chat.getHistory
+			? await chat.getHistory()
+			: [
+					...(options.history ?? []),
+					{ role: 'user', parts },
+					{ role: 'model', parts: response.candidates?.[0]?.content?.parts ?? [] }
+				]
 	};
 }
+
+// ── Utility ──
 
 /**
  * Convert a Blob to a base64 string suitable for the Gemini API.
@@ -153,7 +250,6 @@ export function blobToBase64(blob: Blob): Promise<string> {
 		const reader = new FileReader();
 		reader.onload = () => {
 			const result = reader.result as string;
-			// Strip the data URL prefix (data:image/png;base64,)
 			resolve(result.split(',')[1]);
 		};
 		reader.onerror = reject;

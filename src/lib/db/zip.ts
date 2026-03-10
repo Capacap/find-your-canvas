@@ -123,12 +123,15 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
 	for (const entry of imageEntries) {
 		const file = zip.file('images/' + entry.filename);
 		if (!file) continue;
-		const blob = await file.async('blob');
+		const imageBlob = new Blob([await file.async('blob')], { type: entry.mimeType });
+		const { createThumbnail } = await import('./thumbnail');
+		const thumbnail = await createThumbnail(imageBlob);
 		images.push({
 			id: entry.id,
 			projectId: entry.projectId,
 			messageId: entry.messageId,
-			blob: new Blob([blob], { type: entry.mimeType }),
+			blob: imageBlob,
+			thumbnail,
 			mimeType: entry.mimeType,
 			width: entry.width,
 			height: entry.height,
