@@ -11,7 +11,8 @@ import type {
 	Conversation,
 	Message,
 	StoredImage,
-	Settings
+	Settings,
+	ImageSource
 } from '$lib/types/schema';
 
 // ── Helpers ──
@@ -135,6 +136,13 @@ export async function listConversations(projectId: string): Promise<Conversation
 		.sortBy('updatedAt');
 }
 
+export async function updateConversation(
+	id: string,
+	patch: Partial<Pick<Conversation, 'title'>>
+): Promise<void> {
+	await db.conversations.update(id, { ...patch, updatedAt: now() });
+}
+
 export async function deleteConversation(id: string): Promise<void> {
 	await db.transaction('rw', [db.conversations, db.messages], async () => {
 		await db.messages.where('conversationId').equals(id).delete();
@@ -184,6 +192,7 @@ export async function storeImage(
 	blob: Blob,
 	label: string,
 	options: {
+		source?: ImageSource;
 		messageId?: string;
 		mimeType?: string;
 		width?: number;
@@ -195,6 +204,7 @@ export async function storeImage(
 	const image: StoredImage = {
 		id: generateId(),
 		projectId,
+		source: options.source ?? 'generated',
 		messageId: options.messageId,
 		blob,
 		thumbnail,

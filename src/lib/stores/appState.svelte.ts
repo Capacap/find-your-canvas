@@ -3,6 +3,7 @@
  */
 import type { Project, Conversation, Message, DesignDocument, StoredImage, Settings } from '$lib/types/schema';
 import * as ops from '$lib/db/operations';
+import { downloadProjectZip, importProject } from '$lib/db/zip';
 
 // Current state
 let currentProject = $state<Project | null>(null);
@@ -83,6 +84,39 @@ export async function createNewConversation(title: string): Promise<Conversation
 	return convo;
 }
 
+export async function deleteCurrentProject(): Promise<void> {
+	if (!currentProject) return;
+	const id = currentProject.id;
+	revokeImageUrls();
+	currentProject = null;
+	currentConversation = null;
+	messages = [];
+	conversations = [];
+	projectImages = [];
+	designDoc = null;
+	await ops.deleteProject(id);
+	await loadProjects();
+}
+
+export async function removeConversation(id: string): Promise<void> {
+	if (!currentProject) return;
+	await ops.deleteConversation(id);
+	conversations = await ops.listConversations(currentProject.id);
+	if (currentConversation?.id === id) {
+		currentConversation = null;
+		messages = [];
+	}
+}
+
+export async function renameConversation(id: string, title: string): Promise<void> {
+	if (!currentProject) return;
+	await ops.updateConversation(id, { title });
+	conversations = await ops.listConversations(currentProject.id);
+	if (currentConversation?.id === id) {
+		currentConversation = { ...currentConversation, title };
+	}
+}
+
 export function appendMessage(msg: Message): void {
 	messages = [...messages, msg];
 }
@@ -119,6 +153,26 @@ export async function getImageUrl(imageId: string): Promise<string | null> {
 	const url = ops.imageToObjectUrl(image);
 	imageUrlCache.set(imageId, url);
 	return url;
+}
+
+export async function removeImage(imageId: string): Promise<void> {
+	await ops.deleteImage(imageId);
+	revokeImageUrls();
+	if (currentProject) {
+		projectImages = await ops.listProjectImages(currentProject.id);
+	}
+}
+
+export async function exportCurrentProject(): Promise<void> {
+	if (!currentProject) return;
+	await downloadProjectZip(currentProject.id);
+}
+
+export async function importProjectZip(zipBlob: Blob): Promise<Project> {
+	const project = await importProject(zipBlob);
+	await loadProjects();
+	await selectProject(project.id);
+	return project;
 }
 
 /** Clean up all cached object URLs. Call on project switch or cleanup. */

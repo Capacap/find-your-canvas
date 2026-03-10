@@ -10,7 +10,7 @@
  */
 import type { Content, FunctionCall, Part } from '@google/genai';
 import type { DesignDocument, StoredImage } from '$lib/types/schema';
-import { sendMessage, generateImage, imageDataToBlob, toolDeclarations } from './gemini';
+import { sendMessage, generateImage, imageDataToBlob, blobToBase64, toolDeclarations } from './gemini';
 import {
 	systemTemplate,
 	designDocFullTemplate,
@@ -50,13 +50,30 @@ function buildSystemPrompt(
 
 	let imageIndexSection = '';
 	if (projectImages.length > 0) {
-		const lines = ['## Project Images', 'Use view_image to see any of these.', ''];
-		for (const img of projectImages) {
-			const desc = img.generationContext
-				? ` — ${img.generationContext.slice(0, 120)}${img.generationContext.length > 120 ? '...' : ''}`
-				: '';
-			lines.push(`- **${img.label}** (id: ${img.id})${desc}`);
+		const userImages = projectImages.filter((img) => img.source === 'user');
+		const generatedImages = projectImages.filter((img) => img.source !== 'user');
+		const lines: string[] = [];
+
+		if (userImages.length > 0) {
+			lines.push('## Reference Images (uploaded by user)');
+			lines.push('Use view_image to examine reference material the user has provided.', '');
+			for (const img of userImages) {
+				lines.push(`- **${img.label}** (id: ${img.id})`);
+			}
+			lines.push('');
 		}
+
+		if (generatedImages.length > 0) {
+			lines.push('## Generated Images');
+			lines.push('Use view_image to review previous generations.', '');
+			for (const img of generatedImages) {
+				const desc = img.generationContext
+					? ` — ${img.generationContext.slice(0, 120)}${img.generationContext.length > 120 ? '...' : ''}`
+					: '';
+				lines.push(`- **${img.label}** (id: ${img.id})${desc}`);
+			}
+		}
+
 		imageIndexSection = lines.join('\n');
 	}
 
@@ -168,12 +185,18 @@ async function executeToolCall(
 
 // ── Main orchestration loop ──
 
+export interface UserAttachment {
+	blob: Blob;
+	label: string;
+}
+
 export async function runAgentTurn(
 	projectId: string,
 	conversationId: string,
 	userText: string,
 	conversationHistory: Content[],
-	onEvent: EventCallback
+	onEvent: EventCallback,
+	attachments: UserAttachment[] = []
 ): Promise<void> {
 	const settings = await getSettings();
 	if (!settings.geminiApiKey) {
@@ -197,8 +220,20 @@ export async function runAgentTurn(
 		tools: [{ functionDeclarations: toolDeclarations }]
 	};
 
+	// Store and encode user-attached images.
+	const userImageIds: string[] = [];
+	const userImageParts: Part[] = [];
+	for (const attachment of attachments) {
+		const stored = await ops.storeImage(projectId, attachment.blob, attachment.label, { source: 'user' });
+		userImageIds.push(stored.id);
+		const base64 = await blobToBase64(attachment.blob);
+		userImageParts.push({
+			inlineData: { data: base64, mimeType: attachment.blob.type || 'image/png' }
+		});
+	}
+
 	let history = [...conversationHistory];
-	let currentUserParts: Part[] = [{ text: userText }];
+	let currentUserParts: Part[] = [{ text: userText }, ...userImageParts];
 	let allAssistantText = '';
 	let allImageIds: string[] = [];
 
@@ -242,11 +277,14 @@ export async function runAgentTurn(
 		currentUserParts = allResponseParts;
 	}
 
+	// Store user message with any attached image refs.
+	const userImageRefs = userImageIds.map((id) => `[image:${id}]`).join(' ');
+	const userFullText = userImageRefs ? `${userText}\n\n${userImageRefs}` : userText;
+	await ops.addMessage(conversationId, 'user', userFullText, userImageIds);
+
 	// Store the final assistant message.
 	const imageRefs = allImageIds.map((id) => `[image:${id}]`).join(' ');
 	const fullText = imageRefs ? `${allAssistantText}\n\n${imageRefs}` : allAssistantText;
-
-	await ops.addMessage(conversationId, 'user', userText);
 	await ops.addMessage(conversationId, 'assistant', fullText, allImageIds);
 
 	onEvent({ type: 'done', assistantText: fullText, imageIds: allImageIds });

@@ -29,6 +29,7 @@ interface ImageManifestEntry {
 	id: string;
 	projectId: string;
 	messageId?: string;
+	source?: 'user' | 'generated';
 	mimeType: string;
 	width?: number;
 	height?: number;
@@ -79,6 +80,11 @@ export async function exportProject(projectId: string): Promise<Blob> {
 	};
 	zip.file('project.json', JSON.stringify(manifest, null, 2));
 
+	// Design document as a standalone readable file.
+	if (manifest.designDocument.content) {
+		zip.file('design-doc.md', manifest.designDocument.content);
+	}
+
 	// Images.
 	const imageIndex: ImageManifestEntry[] = [];
 	const imagesFolder = zip.folder('images')!;
@@ -90,6 +96,7 @@ export async function exportProject(projectId: string): Promise<Blob> {
 			id: img.id,
 			projectId: img.projectId,
 			messageId: img.messageId,
+			source: img.source,
 			mimeType: img.mimeType,
 			width: img.width,
 			height: img.height,
@@ -130,6 +137,7 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
 			id: entry.id,
 			projectId: entry.projectId,
 			messageId: entry.messageId,
+			source: entry.source ?? 'generated',
 			blob: imageBlob,
 			thumbnail,
 			mimeType: entry.mimeType,

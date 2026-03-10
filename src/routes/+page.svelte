@@ -9,14 +9,24 @@
 		createNewProject,
 		selectConversation,
 		createNewConversation,
+		deleteCurrentProject,
+		removeConversation,
+		renameConversation,
 		refreshMessages,
 		refreshDesignDoc,
 		refreshProjectImages,
 		getImageUrl,
-		revokeImageUrls
+		revokeImageUrls,
+		exportCurrentProject,
+		importProjectZip,
+		removeImage
 	} from '$lib/stores/appState.svelte';
-	import { runAgentTurn, type OrchestratorEvent } from '$lib/engine/orchestrator';
+	import { runAgentTurn, type OrchestratorEvent, type UserAttachment } from '$lib/engine/orchestrator';
+	import { marked } from 'marked';
 	import type { Content } from '@google/genai';
+
+	// Configure marked for safe inline rendering.
+	marked.setOptions({ breaks: true, gfm: true });
 
 	const app = getAppState();
 
@@ -30,6 +40,8 @@
 	let showDesignDoc = $state(false);
 	let showImageGallery = $state(false);
 	let lightboxImageId = $state<string | null>(null);
+	let pendingFiles = $state<File[]>([]);
+	let isDragging = $state(false);
 
 	// Image URL resolution for display
 	let resolvedImageUrls = $state<Record<string, string>>({});
@@ -78,8 +90,8 @@
 		await selectProject(id);
 	}
 
-	async function handleNewConversation() {
-		await createNewConversation('New conversation');
+	async function handleNewConversation(title = 'New conversation') {
+		await createNewConversation(title);
 	}
 
 	async function resolveImageId(imageId: string) {
@@ -91,15 +103,22 @@
 	}
 
 	async function handleSend() {
-		if (!userInput.trim() || isRunning) return;
+		if ((!userInput.trim() && pendingFiles.length === 0) || isRunning) return;
 		if (!app.currentProject) return;
 
-		// Auto-create a conversation if none selected.
-		if (!app.currentConversation) {
-			await handleNewConversation();
-		}
-
 		const text = userInput.trim();
+		const filesToSend = [...pendingFiles];
+		pendingFiles = [];
+
+		// Auto-create a conversation if none selected, titled from the first message.
+		if (!app.currentConversation) {
+			const title = text.length > 50 ? text.slice(0, 50) + '...' : text;
+			await handleNewConversation(title);
+		} else if (app.messages.length === 0 && app.currentConversation.title === 'New conversation') {
+			// Rename a freshly created conversation that hasn't had a message yet.
+			const title = text.length > 50 ? text.slice(0, 50) + '...' : text;
+			await renameConversation(app.currentConversation.id, title);
+		}
 		userInput = '';
 		isRunning = true;
 		streamedEvents = [];
@@ -128,13 +147,19 @@
 			else if (event.type === 'done') statusText = '';
 		};
 
+		const attachments: UserAttachment[] = filesToSend.map((f) => ({
+			blob: f,
+			label: f.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ')
+		}));
+
 		try {
 			await runAgentTurn(
 				app.currentProject.id,
 				app.currentConversation!.id,
 				text,
 				history,
-				onEvent
+				onEvent,
+				attachments
 			);
 			await refreshMessages();
 			await refreshProjectImages();
@@ -159,16 +184,18 @@
 		}
 	}
 
-	/** Parse [image:id] references in message text and return HTML. */
+	/** Render message text as markdown, then resolve [image:id] references. */
 	function renderMessageText(text: string): string {
-		return text.replace(
+		// First replace image refs with placeholders that won't be escaped by marked.
+		const withImages = text.replace(
 			/\[image:([^\]]+)\]/g,
 			(_, id) => {
 				const url = resolvedImageUrls[id];
 				if (url) return `<img src="${url}" alt="${id}" class="inline-image" data-image-id="${id}" />`;
-				return `[image:${id}]`;
+				return `<span class="image-missing">Image not found</span>`;
 			}
 		);
+		return marked.parse(withImages, { async: false }) as string;
 	}
 
 	function openLightbox(imageId: string) {
@@ -188,6 +215,82 @@
 
 	function handleLightboxKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') closeLightbox();
+	}
+
+	async function handleDeleteProject() {
+		if (!app.currentProject) return;
+		if (!confirm(`Delete project "${app.currentProject.name}" and all its data?`)) return;
+		await deleteCurrentProject();
+	}
+
+	async function handleDeleteConversation(id: string, title: string) {
+		if (!confirm(`Delete conversation "${title}"?`)) return;
+		await removeConversation(id);
+	}
+
+	const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
+
+	function addFiles(files: FileList | File[]) {
+		const images = Array.from(files).filter((f) => ACCEPTED_IMAGE_TYPES.includes(f.type));
+		if (images.length > 0) {
+			pendingFiles = [...pendingFiles, ...images];
+		}
+	}
+
+	function removePendingFile(index: number) {
+		pendingFiles = pendingFiles.filter((_, i) => i !== index);
+	}
+
+	let attachInput = $state<HTMLInputElement>(null!);
+
+	function handleDragOver(e: DragEvent) {
+		e.preventDefault();
+		isDragging = true;
+	}
+
+	function handleDragLeave(e: DragEvent) {
+		e.preventDefault();
+		isDragging = false;
+	}
+
+	function handleDrop(e: DragEvent) {
+		e.preventDefault();
+		isDragging = false;
+		if (e.dataTransfer?.files) {
+			addFiles(e.dataTransfer.files);
+		}
+	}
+
+	async function handleDeleteImage(imageId: string, label: string) {
+		if (!confirm(`Delete "${label}"? References in messages will show as missing.`)) return;
+		await removeImage(imageId);
+	}
+
+	async function handleExportProject() {
+		if (!app.currentProject) return;
+		statusText = 'Exporting project...';
+		try {
+			await exportCurrentProject();
+			statusText = '';
+		} catch (err) {
+			statusText = `Export failed: ${err instanceof Error ? err.message : String(err)}`;
+		}
+	}
+
+	let importFileInput = $state<HTMLInputElement>(null!);
+
+	async function handleImportFile(e: Event) {
+		const input = e.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		statusText = 'Importing project...';
+		try {
+			await importProjectZip(file);
+			statusText = '';
+		} catch (err) {
+			statusText = `Import failed: ${err instanceof Error ? err.message : String(err)}`;
+		}
+		input.value = '';
 	}
 </script>
 
@@ -211,6 +314,12 @@
 					onclick={() => { showImageGallery = !showImageGallery; showDesignDoc = false; }}
 				>
 					Images{app.projectImages.length > 0 ? ` (${app.projectImages.length})` : ''}
+				</button>
+				<button onclick={handleExportProject}>
+					Export
+				</button>
+				<button class="delete-btn" onclick={handleDeleteProject}>
+					Delete Project
 				</button>
 			{/if}
 			<button onclick={() => { showSettings = !showSettings; }}>
@@ -245,7 +354,18 @@
 					onkeydown={(e) => e.key === 'Enter' && handleCreateProject()}
 				/>
 				<button onclick={handleCreateProject} disabled={!newProjectName.trim()}>Create</button>
+				<button onclick={() => importFileInput.click()}>Import</button>
+				<input
+					bind:this={importFileInput}
+					type="file"
+					accept=".zip"
+					onchange={handleImportFile}
+					style="display: none;"
+				/>
 			</div>
+			{#if statusText}
+				<p class="status">{statusText}</p>
+			{/if}
 			{#if app.projects.length === 0}
 				<p class="empty-state">No projects yet. Create one to get started.</p>
 			{:else}
@@ -261,15 +381,24 @@
 		<!-- Project workspace -->
 		<div class="workspace">
 			<aside class="sidebar">
-				<button class="new-convo" onclick={handleNewConversation}>+ New Conversation</button>
+				<button class="new-convo" onclick={() => handleNewConversation()}>+ New Conversation</button>
 				{#each app.conversations as convo}
-					<button
-						class="convo-item"
-						class:active={app.currentConversation?.id === convo.id}
-						onclick={() => selectConversation(convo.id)}
-					>
-						{convo.title}
-					</button>
+					<div class="convo-row" class:active={app.currentConversation?.id === convo.id}>
+						<button
+							class="convo-item"
+							class:active={app.currentConversation?.id === convo.id}
+							onclick={() => selectConversation(convo.id)}
+						>
+							{convo.title}
+						</button>
+						<button
+							class="convo-delete"
+							onclick={(e) => { e.stopPropagation(); handleDeleteConversation(convo.id, convo.title); }}
+							title="Delete conversation"
+						>
+							&times;
+						</button>
+					</div>
 				{/each}
 			</aside>
 
@@ -285,30 +414,72 @@
 			{/if}
 
 			{#if showImageGallery}
+				{@const userImages = app.projectImages.filter((i) => i.source === 'user')}
+				{@const generatedImages = app.projectImages.filter((i) => i.source !== 'user')}
 				<aside class="side-panel">
 					<h3>Project Images</h3>
 					{#if app.projectImages.length === 0}
-						<p class="empty-state">No images yet. Ask the assistant to generate some.</p>
-					{:else}
+						<p class="empty-state">No images yet. Ask the assistant to generate some, or upload reference material.</p>
+					{/if}
+					{#if userImages.length > 0}
+						<h4 class="gallery-section-title">Reference</h4>
 						<div class="image-gallery">
-							{#each app.projectImages as img}
-								<button
-									class="gallery-thumb"
-									onclick={() => openLightbox(img.id)}
-									title={img.label}
-								>
-									{#if resolvedImageUrls[img.id]}
-										<img src={resolvedImageUrls[img.id]} alt={img.label} />
-									{/if}
-									<span class="gallery-label">{img.label}</span>
-								</button>
+							{#each userImages as img}
+								<div class="gallery-item">
+									<button
+										class="gallery-thumb"
+										onclick={() => openLightbox(img.id)}
+										title={img.label}
+									>
+										{#if resolvedImageUrls[img.id]}
+											<img src={resolvedImageUrls[img.id]} alt={img.label} />
+										{/if}
+										<span class="gallery-label">{img.label}</span>
+									</button>
+									<button
+										class="gallery-delete"
+										onclick={() => handleDeleteImage(img.id, img.label)}
+										title="Delete image"
+									>&times;</button>
+								</div>
+							{/each}
+						</div>
+					{/if}
+					{#if generatedImages.length > 0}
+						<h4 class="gallery-section-title">Generated</h4>
+						<div class="image-gallery">
+							{#each generatedImages as img}
+								<div class="gallery-item">
+									<button
+										class="gallery-thumb"
+										onclick={() => openLightbox(img.id)}
+										title={img.label}
+									>
+										{#if resolvedImageUrls[img.id]}
+											<img src={resolvedImageUrls[img.id]} alt={img.label} />
+										{/if}
+										<span class="gallery-label">{img.label}</span>
+									</button>
+									<button
+										class="gallery-delete"
+										onclick={() => handleDeleteImage(img.id, img.label)}
+										title="Delete image"
+									>&times;</button>
+								</div>
 							{/each}
 						</div>
 					{/if}
 				</aside>
 			{/if}
 
-			<main class="chat">
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<main
+			class="chat"
+			class:dragging={isDragging}
+			ondragover={handleDragOver}
+			ondragleave={handleDragLeave}
+			ondrop={handleDrop}
+		>
 				<div class="messages">
 					{#each app.messages as msg}
 						<!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -335,7 +506,36 @@
 					{/if}
 				</div>
 
+				{#if pendingFiles.length > 0}
+					<div class="pending-files">
+						{#each pendingFiles as file, i}
+							<div class="pending-thumb">
+								<img src={URL.createObjectURL(file)} alt={file.name} />
+								<button class="pending-remove" onclick={() => removePendingFile(i)}>&times;</button>
+							</div>
+						{/each}
+					</div>
+				{/if}
+
 				<div class="input-area">
+					<button
+						class="attach-btn"
+						onclick={() => attachInput.click()}
+						disabled={isRunning || !app.settings?.geminiApiKey}
+						title="Attach images"
+					>
+						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+						</svg>
+					</button>
+					<input
+						bind:this={attachInput}
+						type="file"
+						accept="image/png,image/jpeg,image/webp,image/heic,image/heif"
+						multiple
+						onchange={(e) => { const t = e.target as HTMLInputElement; if (t.files) addFiles(t.files); t.value = ''; }}
+						style="display: none;"
+					/>
 					<textarea
 						bind:value={userInput}
 						onkeydown={handleKeydown}
@@ -343,7 +543,7 @@
 						disabled={isRunning || !app.settings?.geminiApiKey}
 						rows={3}
 					></textarea>
-					<button onclick={handleSend} disabled={isRunning || !userInput.trim()}>
+					<button onclick={handleSend} disabled={isRunning || (!userInput.trim() && pendingFiles.length === 0)}>
 						{isRunning ? '...' : 'Send'}
 					</button>
 				</div>
@@ -533,13 +733,27 @@
 		margin-bottom: 0.5rem;
 	}
 
+	.convo-row {
+		display: flex;
+		align-items: center;
+		border-radius: 4px;
+	}
+
+	.convo-row:hover .convo-delete {
+		opacity: 1;
+	}
+
 	.convo-item {
+		flex: 1;
 		text-align: left;
 		border: none;
 		background: transparent;
 		padding: 0.5rem;
 		border-radius: 4px;
 		color: #aaa;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.convo-item:hover {
@@ -550,6 +764,30 @@
 	.convo-item.active {
 		background: #1e1e1e;
 		color: #f5c542;
+	}
+
+	.convo-delete {
+		opacity: 0;
+		background: none;
+		border: none;
+		color: #666;
+		font-size: 1rem;
+		padding: 0.25rem 0.4rem;
+		cursor: pointer;
+		flex-shrink: 0;
+	}
+
+	.convo-delete:hover {
+		color: #e55;
+	}
+
+	.delete-btn {
+		color: #e55;
+		border-color: #e55;
+	}
+
+	.delete-btn:hover:not(:disabled) {
+		background: #2a1515;
 	}
 
 	/* Side Panels (Design Doc, Image Gallery) */
@@ -581,10 +819,50 @@
 	}
 
 	/* Image Gallery */
+	.gallery-section-title {
+		font-size: 0.75rem;
+		color: #888;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		margin: 0.75rem 0 0.4rem;
+	}
+
+	.gallery-section-title:first-of-type {
+		margin-top: 0;
+	}
+
 	.image-gallery {
 		display: grid;
 		grid-template-columns: 1fr 1fr;
 		gap: 0.5rem;
+	}
+
+	.gallery-item {
+		position: relative;
+	}
+
+	.gallery-item:hover .gallery-delete {
+		opacity: 1;
+	}
+
+	.gallery-delete {
+		position: absolute;
+		top: 2px;
+		right: 2px;
+		opacity: 0;
+		background: rgba(0, 0, 0, 0.7);
+		border: none;
+		color: #fff;
+		font-size: 0.9rem;
+		padding: 0 0.35rem;
+		cursor: pointer;
+		line-height: 1.4;
+		border-radius: 4px;
+		z-index: 1;
+	}
+
+	.gallery-delete:hover {
+		background: #e55;
 	}
 
 	.gallery-thumb {
@@ -668,7 +946,51 @@
 		padding: 0.75rem 1rem;
 		border-radius: 8px;
 		line-height: 1.5;
-		white-space: pre-wrap;
+	}
+
+	.message-text :global(p) {
+		margin: 0 0 0.5rem;
+	}
+
+	.message-text :global(p:last-child) {
+		margin-bottom: 0;
+	}
+
+	.message-text :global(pre) {
+		background: #111;
+		padding: 0.75rem;
+		border-radius: 4px;
+		overflow-x: auto;
+		font-size: 0.85rem;
+	}
+
+	.message-text :global(code) {
+		background: #111;
+		padding: 0.15rem 0.3rem;
+		border-radius: 3px;
+		font-size: 0.85em;
+	}
+
+	.message-text :global(pre code) {
+		background: none;
+		padding: 0;
+	}
+
+	.message-text :global(ul), .message-text :global(ol) {
+		margin: 0.25rem 0 0.5rem;
+		padding-left: 1.5rem;
+	}
+
+	.message-text :global(h1), .message-text :global(h2), .message-text :global(h3) {
+		margin: 0.75rem 0 0.25rem;
+		font-size: 1rem;
+	}
+
+	.message-text :global(blockquote) {
+		border-left: 3px solid #444;
+		margin: 0.5rem 0;
+		padding-left: 0.75rem;
+		color: #aaa;
 	}
 
 	.message.user .message-text {
@@ -680,6 +1002,16 @@
 		gap: 0.5rem;
 		margin-top: 0.5rem;
 		flex-wrap: wrap;
+	}
+
+	:global(.image-missing) {
+		display: inline-block;
+		color: #e55;
+		font-size: 0.8rem;
+		padding: 0.15rem 0.4rem;
+		border: 1px solid #e55;
+		border-radius: 3px;
+		opacity: 0.7;
 	}
 
 	:global(.inline-image) {
@@ -700,6 +1032,71 @@
 		color: #f5c542;
 		font-size: 0.85rem;
 		padding: 0.5rem;
+	}
+
+	.chat.dragging {
+		outline: 2px dashed #f5c542;
+		outline-offset: -4px;
+	}
+
+	.pending-files {
+		display: flex;
+		gap: 0.5rem;
+		padding: 0.5rem 1.5rem 0;
+		background: #111;
+		border-top: 1px solid #222;
+		flex-wrap: wrap;
+	}
+
+	.pending-thumb {
+		position: relative;
+		width: 56px;
+		height: 56px;
+		border-radius: 6px;
+		overflow: hidden;
+		border: 1px solid #333;
+	}
+
+	.pending-thumb img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		display: block;
+	}
+
+	.pending-remove {
+		position: absolute;
+		top: 0;
+		right: 0;
+		background: rgba(0, 0, 0, 0.7);
+		border: none;
+		color: #fff;
+		font-size: 0.8rem;
+		padding: 0 0.3rem;
+		cursor: pointer;
+		line-height: 1.4;
+		border-radius: 0 0 0 4px;
+	}
+
+	.pending-remove:hover {
+		background: #e55;
+	}
+
+	.attach-btn {
+		align-self: flex-end;
+		background: none;
+		border: 1px solid #444;
+		color: #999;
+		padding: 0.45rem;
+		border-radius: 6px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.attach-btn:hover:not(:disabled) {
+		color: #f5c542;
+		border-color: #f5c542;
 	}
 
 	.input-area {
