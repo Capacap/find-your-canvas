@@ -55,22 +55,6 @@ export async function selectProject(id: string): Promise<void> {
 		conversations = await ops.listConversations(id);
 		projectImages = await ops.listProjectImages(id);
 		memoryTopics = await ops.listMemoryTopics(id);
-
-		// Lazy migration: design doc -> memory topic.
-		if (memoryTopics.length === 0) {
-			const designDoc = await ops.getDesignDocument(id);
-			if (designDoc?.content) {
-				await ops.upsertMemoryTopic(
-					id,
-					'project-notes',
-					'Project Notes',
-					'Migrated from original design document. Reorganize into specific topics.',
-					designDoc.content
-				);
-				await ops.updateDesignDocument(id, '');
-				memoryTopics = await ops.listMemoryTopics(id);
-			}
-		}
 	} else {
 		projectImages = [];
 		memoryTopics = [];

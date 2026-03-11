@@ -140,9 +140,9 @@
 				resolveImageId(event.imageId);
 				statusText = `Generated: ${event.label}`;
 			}
-			else if (event.type === 'design_doc_updated' || event.type === 'memory_updated') {
+			else if (event.type === 'memory_updated') {
 				refreshMemoryTopics();
-				statusText = event.type === 'memory_updated' ? `Memory updated: ${event.slug}` : 'Memory updated';
+				statusText = `Memory updated: ${event.slug}`;
 			}
 			else if (event.type === 'error') statusText = event.message;
 			else if (event.type === 'done') statusText = '';

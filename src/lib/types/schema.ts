@@ -16,16 +16,6 @@ export interface Project {
 	updatedAt: number;
 }
 
-/**
- * The design document: a living summary of established decisions.
- * The agent maintains this as the project evolves. One per project.
- */
-export interface DesignDocument {
-	projectId: string;
-	content: string;
-	updatedAt: number;
-}
-
 /** A conversation thread within a project. */
 export interface Conversation {
 	id: string;

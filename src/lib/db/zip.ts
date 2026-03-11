@@ -2,35 +2,25 @@
  * Project export/import as zip files.
  *
  * Zip structure:
- *   project.json     - project metadata, design doc, conversations, messages
- *   images/          - image blobs as files, keyed by image ID
- *   images/index.json - image metadata (everything except the blob)
+ *   project.json      - project metadata, conversations, messages, memory topics
+ *   memory/            - per-topic markdown files (human-readable)
+ *   images/            - image blobs as files, keyed by image ID
+ *   images/index.json  - image metadata (everything except the blob)
  */
 import JSZip from 'jszip';
 import { db } from './database';
 import type {
 	Project,
-	DesignDocument,
 	Conversation,
 	Message,
 	StoredImage,
 	MemoryTopic
 } from '$lib/types/schema';
 
-interface ExportManifestV1 {
+interface ExportManifest {
 	version: 1;
 	exportedAt: number;
 	project: Project;
-	designDocument: DesignDocument;
-	conversations: Conversation[];
-	messages: Message[];
-}
-
-interface ExportManifest {
-	version: 2;
-	exportedAt: number;
-	project: Project;
-	designDocument: DesignDocument;
 	conversations: Conversation[];
 	messages: Message[];
 	memoryTopics: MemoryTopic[];
@@ -64,7 +54,6 @@ export async function exportProject(projectId: string): Promise<Blob> {
 	const project = await db.projects.get(projectId);
 	if (!project) throw new Error(`Project ${projectId} not found`);
 
-	const designDocument = await db.designDocuments.get(projectId);
 	const conversations = await db.conversations
 		.where('projectId')
 		.equals(projectId)
@@ -81,22 +70,15 @@ export async function exportProject(projectId: string): Promise<Blob> {
 
 	const zip = new JSZip();
 
-	// Project manifest (no blobs).
 	const manifest: ExportManifest = {
-		version: 2,
+		version: 1,
 		exportedAt: Date.now(),
 		project,
-		designDocument: designDocument ?? { projectId, content: '', updatedAt: project.updatedAt },
 		conversations,
 		messages,
 		memoryTopics
 	};
 	zip.file('project.json', JSON.stringify(manifest, null, 2));
-
-	// Design document as a standalone readable file (legacy).
-	if (manifest.designDocument.content) {
-		zip.file('design-doc.md', manifest.designDocument.content);
-	}
 
 	// Memory topics as individual markdown files.
 	if (memoryTopics.length > 0) {
@@ -138,9 +120,8 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
 	const manifestFile = zip.file('project.json');
 	if (!manifestFile) throw new Error('Invalid project zip: missing project.json');
 
-	const raw = JSON.parse(await manifestFile.async('text'));
-	if (raw.version !== 1 && raw.version !== 2) throw new Error(`Unsupported export version: ${raw.version}`);
-	const manifest = raw as ExportManifest | ExportManifestV1;
+	const manifest: ExportManifest = JSON.parse(await manifestFile.async('text'));
+	if (manifest.version !== 1) throw new Error(`Unsupported export version: ${manifest.version}`);
 
 	// Load image index and blobs.
 	const imageIndexFile = zip.file('images/index.json');
@@ -171,21 +152,16 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
 		});
 	}
 
-	// Extract memory topics from v2 manifests.
-	const memoryTopics: MemoryTopic[] = manifest.version === 2 ? manifest.memoryTopics : [];
-
-	// Write everything in a single transaction.
 	await db.transaction(
 		'rw',
-		[db.projects, db.designDocuments, db.conversations, db.messages, db.images, db.memoryTopics],
+		[db.projects, db.conversations, db.messages, db.images, db.memoryTopics],
 		async () => {
 			await db.projects.put(manifest.project);
-			await db.designDocuments.put(manifest.designDocument);
 			await db.conversations.bulkPut(manifest.conversations);
 			await db.messages.bulkPut(manifest.messages);
 			await db.images.bulkPut(images);
-			if (memoryTopics.length > 0) {
-				await db.memoryTopics.bulkPut(memoryTopics);
+			if (manifest.memoryTopics.length > 0) {
+				await db.memoryTopics.bulkPut(manifest.memoryTopics);
 			}
 		}
 	);

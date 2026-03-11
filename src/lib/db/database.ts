@@ -1,7 +1,6 @@
 import Dexie, { type EntityTable } from 'dexie';
 import type {
 	Project,
-	DesignDocument,
 	Conversation,
 	Message,
 	StoredImage,
@@ -11,7 +10,6 @@ import type {
 
 class BananaDB extends Dexie {
 	projects!: EntityTable<Project, 'id'>;
-	designDocuments!: EntityTable<DesignDocument, 'projectId'>;
 	conversations!: EntityTable<Conversation, 'id'>;
 	messages!: EntityTable<Message, 'id'>;
 	images!: EntityTable<StoredImage, 'id'>;
@@ -30,12 +28,11 @@ class BananaDB extends Dexie {
 			settings: 'id'
 		});
 
-		// v2: adds thumbnail field to images (not indexed, no store change needed).
-		// Existing images will have thumbnail backfilled on first access.
 		this.version(2).stores({});
 
-		// v3: adds memoryTopics table for structured project memory.
+		// v3: replaces designDocuments with memoryTopics.
 		this.version(3).stores({
+			designDocuments: null,
 			memoryTopics: 'id, projectId, [projectId+slug]'
 		});
 	}

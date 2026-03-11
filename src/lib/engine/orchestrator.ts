@@ -27,7 +27,6 @@ export type OrchestratorEvent =
 	| { type: 'image_generating'; label: string }
 	| { type: 'image_complete'; imageId: string; label: string }
 	| { type: 'image_viewing'; imageId: string; reason?: string }
-	| { type: 'design_doc_updated' }
 	| { type: 'memory_updated'; slug: string }
 	| { type: 'error'; message: string }
 	| { type: 'done'; assistantText: string; imageIds: string[] }
@@ -240,26 +239,6 @@ async function executeToolCall(
 		return {
 			responseParts: [
 				{ functionResponse: { name, response: { output: `Memory topic "${slug}" ${action}.` } } }
-			]
-		};
-	}
-
-	if (name === 'update_design_doc') {
-		// Deprecation shim: redirect to update_memory.
-		const content = args.content as string;
-		await ops.upsertMemoryTopic(
-			projectId,
-			'project-notes',
-			'Project Notes',
-			'General project decisions (migrated from design document).',
-			content
-		);
-		onEvent({ type: 'memory_updated', slug: 'project-notes' });
-		return {
-			responseParts: [
-				{ functionResponse: { name, response: {
-					output: 'Design document saved as memory topic "project-notes". Use update_memory instead of update_design_doc going forward. Consider splitting into focused topics.'
-				} } }
 			]
 		};
 	}

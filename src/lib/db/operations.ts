@@ -7,7 +7,6 @@ import { DEFAULT_SETTINGS } from '$lib/types/schema';
 import { createThumbnail } from './thumbnail';
 import type {
 	Project,
-	DesignDocument,
 	Conversation,
 	Message,
 	StoredImage,
@@ -50,15 +49,6 @@ export async function createProject(name: string, description: string = ''): Pro
 		updatedAt: timestamp
 	};
 	await db.projects.add(project);
-
-	// Every project gets an empty design document.
-	const doc: DesignDocument = {
-		projectId: project.id,
-		content: '',
-		updatedAt: timestamp
-	};
-	await db.designDocuments.add(doc);
-
 	return project;
 }
 
@@ -78,7 +68,7 @@ export async function updateProject(
 }
 
 export async function deleteProject(id: string): Promise<void> {
-	await db.transaction('rw', [db.projects, db.designDocuments, db.conversations, db.messages, db.images, db.memoryTopics], async () => {
+	await db.transaction('rw', [db.projects, db.conversations, db.messages, db.images, db.memoryTopics], async () => {
 		const conversationIds = await db.conversations
 			.where('projectId')
 			.equals(id)
@@ -94,24 +84,8 @@ export async function deleteProject(id: string): Promise<void> {
 		await db.conversations.where('projectId').equals(id).delete();
 		await db.images.where('projectId').equals(id).delete();
 		await db.memoryTopics.where('projectId').equals(id).delete();
-		await db.designDocuments.delete(id);
 		await db.projects.delete(id);
 	});
-}
-
-// ── Design Documents ──
-
-export async function getDesignDocument(projectId: string): Promise<DesignDocument | undefined> {
-	return db.designDocuments.get(projectId);
-}
-
-export async function updateDesignDocument(projectId: string, content: string): Promise<void> {
-	await db.designDocuments.put({
-		projectId,
-		content,
-		updatedAt: now()
-	});
-	await db.projects.update(projectId, { updatedAt: now() });
 }
 
 // ── Memory Topics ──

@@ -112,21 +112,6 @@ export const toolDeclarations: FunctionDeclaration[] = [
 			},
 			required: ['topic', 'title', 'summary', 'content']
 		}
-	},
-	{
-		name: 'update_design_doc',
-		description:
-			'Deprecated. Use update_memory instead to store project decisions as structured memory topics.',
-		parameters: {
-			type: Type.OBJECT,
-			properties: {
-				content: {
-					type: Type.STRING,
-					description: 'The full updated design document content in markdown.'
-				}
-			},
-			required: ['content']
-		}
 	}
 ];
 
