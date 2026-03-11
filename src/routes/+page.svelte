@@ -15,6 +15,7 @@
 		refreshMessages,
 		refreshDesignDoc,
 		refreshProjectImages,
+		refreshMemoryTopics,
 		getImageUrl,
 		revokeImageUrls,
 		exportCurrentProject,
@@ -37,7 +38,7 @@
 	let apiKeyInput = $state('');
 	let newProjectName = $state('');
 	let streamedEvents = $state<OrchestratorEvent[]>([]);
-	let showDesignDoc = $state(false);
+	let showMemoryPanel = $state(false);
 	let showImageGallery = $state(false);
 	let showDebug = $state(false);
 	let lightboxImageId = $state<string | null>(null);
@@ -142,7 +143,12 @@
 			}
 			else if (event.type === 'design_doc_updated') {
 				refreshDesignDoc();
+				refreshMemoryTopics();
 				statusText = 'Design document updated';
+			}
+			else if (event.type === 'memory_updated') {
+				refreshMemoryTopics();
+				statusText = `Memory updated: ${event.slug}`;
 			}
 			else if (event.type === 'error') statusText = event.message;
 			else if (event.type === 'done') statusText = '';
@@ -305,14 +311,14 @@
 				</button>
 				<span class="project-name">{app.currentProject.name}</span>
 				<button
-					class:active-toggle={showDesignDoc}
-					onclick={() => { showDesignDoc = !showDesignDoc; showImageGallery = false; }}
+					class:active-toggle={showMemoryPanel}
+					onclick={() => { showMemoryPanel = !showMemoryPanel; showImageGallery = false; }}
 				>
-					Design Doc
+					Memory
 				</button>
 				<button
 					class:active-toggle={showImageGallery}
-					onclick={() => { showImageGallery = !showImageGallery; showDesignDoc = false; }}
+					onclick={() => { showImageGallery = !showImageGallery; showMemoryPanel = false; }}
 				>
 					Images{app.projectImages.length > 0 ? ` (${app.projectImages.length})` : ''}
 				</button>
@@ -407,13 +413,22 @@
 				{/each}
 			</aside>
 
-			{#if showDesignDoc}
+			{#if showMemoryPanel}
 				<aside class="side-panel">
-					<h3>Design Document</h3>
-					{#if app.designDoc?.content}
-						<div class="design-doc-content">{app.designDoc.content}</div>
+					<h3>Project Memory</h3>
+					{#if app.memoryTopics.length === 0}
+						<p class="empty-state">No memory topics yet. The assistant will create them as your project takes shape.</p>
 					{:else}
-						<p class="empty-state">No design decisions established yet. The assistant will populate this as your project takes shape.</p>
+						{#each app.memoryTopics as topic}
+							<details class="memory-topic">
+								<summary>
+									<span class="memory-title">{topic.title}</span>
+									<span class="memory-slug">{topic.slug}</span>
+								</summary>
+								<div class="memory-summary">{topic.summary}</div>
+								<div class="memory-content">{topic.content}</div>
+							</details>
+						{/each}
 					{/if}
 				</aside>
 			{/if}
@@ -857,6 +872,54 @@
 		line-height: 1.6;
 		white-space: pre-wrap;
 		color: #ccc;
+	}
+
+	.memory-topic {
+		border: 1px solid #222;
+		border-radius: 6px;
+		margin-bottom: 0.5rem;
+	}
+
+	.memory-topic summary {
+		padding: 0.5rem 0.6rem;
+		cursor: pointer;
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		user-select: none;
+	}
+
+	.memory-topic summary:hover {
+		background: #1a1a1a;
+	}
+
+	.memory-title {
+		font-size: 0.85rem;
+		font-weight: 600;
+		color: #ddd;
+	}
+
+	.memory-slug {
+		font-size: 0.7rem;
+		color: #666;
+		font-family: monospace;
+	}
+
+	.memory-summary {
+		padding: 0.25rem 0.6rem 0.4rem;
+		font-size: 0.78rem;
+		color: #999;
+		border-bottom: 1px solid #1a1a1a;
+	}
+
+	.memory-content {
+		padding: 0.5rem 0.6rem;
+		font-size: 0.82rem;
+		line-height: 1.5;
+		white-space: pre-wrap;
+		color: #bbb;
+		max-height: 20rem;
+		overflow-y: auto;
 	}
 
 	.active-toggle {

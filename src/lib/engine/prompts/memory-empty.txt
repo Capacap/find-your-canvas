@@ -1,0 +1,2 @@
+## Project Memory
+No topics established yet. As we work together, use `update_memory` to capture key decisions about style, characters, settings, and other project elements. Organize into focused topics rather than one monolithic document.

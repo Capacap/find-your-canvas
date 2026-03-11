@@ -13,16 +13,27 @@ import type {
 	DesignDocument,
 	Conversation,
 	Message,
-	StoredImage
+	StoredImage,
+	MemoryTopic
 } from '$lib/types/schema';
 
-interface ExportManifest {
+interface ExportManifestV1 {
 	version: 1;
 	exportedAt: number;
 	project: Project;
 	designDocument: DesignDocument;
 	conversations: Conversation[];
 	messages: Message[];
+}
+
+interface ExportManifest {
+	version: 2;
+	exportedAt: number;
+	project: Project;
+	designDocument: DesignDocument;
+	conversations: Conversation[];
+	messages: Message[];
+	memoryTopics: MemoryTopic[];
 }
 
 interface ImageManifestEntry {
@@ -66,23 +77,33 @@ export async function exportProject(projectId: string): Promise<Blob> {
 			: [];
 
 	const images = await db.images.where('projectId').equals(projectId).toArray();
+	const memoryTopics = await db.memoryTopics.where('projectId').equals(projectId).toArray();
 
 	const zip = new JSZip();
 
 	// Project manifest (no blobs).
 	const manifest: ExportManifest = {
-		version: 1,
+		version: 2,
 		exportedAt: Date.now(),
 		project,
 		designDocument: designDocument ?? { projectId, content: '', updatedAt: project.updatedAt },
 		conversations,
-		messages
+		messages,
+		memoryTopics
 	};
 	zip.file('project.json', JSON.stringify(manifest, null, 2));
 
-	// Design document as a standalone readable file.
+	// Design document as a standalone readable file (legacy).
 	if (manifest.designDocument.content) {
 		zip.file('design-doc.md', manifest.designDocument.content);
+	}
+
+	// Memory topics as individual markdown files.
+	if (memoryTopics.length > 0) {
+		const memoryFolder = zip.folder('memory')!;
+		for (const topic of memoryTopics) {
+			memoryFolder.file(`${topic.slug}.md`, `# ${topic.title}\n\n${topic.content}`);
+		}
 	}
 
 	// Images.
@@ -117,8 +138,9 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
 	const manifestFile = zip.file('project.json');
 	if (!manifestFile) throw new Error('Invalid project zip: missing project.json');
 
-	const manifest: ExportManifest = JSON.parse(await manifestFile.async('text'));
-	if (manifest.version !== 1) throw new Error(`Unsupported export version: ${manifest.version}`);
+	const raw = JSON.parse(await manifestFile.async('text'));
+	if (raw.version !== 1 && raw.version !== 2) throw new Error(`Unsupported export version: ${raw.version}`);
+	const manifest = raw as ExportManifest | ExportManifestV1;
 
 	// Load image index and blobs.
 	const imageIndexFile = zip.file('images/index.json');
@@ -149,16 +171,22 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
 		});
 	}
 
+	// Extract memory topics from v2 manifests.
+	const memoryTopics: MemoryTopic[] = manifest.version === 2 ? manifest.memoryTopics : [];
+
 	// Write everything in a single transaction.
 	await db.transaction(
 		'rw',
-		[db.projects, db.designDocuments, db.conversations, db.messages, db.images],
+		[db.projects, db.designDocuments, db.conversations, db.messages, db.images, db.memoryTopics],
 		async () => {
 			await db.projects.put(manifest.project);
 			await db.designDocuments.put(manifest.designDocument);
 			await db.conversations.bulkPut(manifest.conversations);
 			await db.messages.bulkPut(manifest.messages);
 			await db.images.bulkPut(images);
+			if (memoryTopics.length > 0) {
+				await db.memoryTopics.bulkPut(memoryTopics);
+			}
 		}
 	);
 

@@ -77,6 +77,21 @@ export interface StoredImage {
 	createdAt: number;
 }
 
+/** A topic in the structured project memory. */
+export interface MemoryTopic {
+	id: string;
+	projectId: string;
+	/** Agent-assigned, unique per project, e.g. "art-style". */
+	slug: string;
+	title: string;
+	/** 1-2 sentences shown in the system prompt index. */
+	summary: string;
+	/** Full markdown body, fetched on demand via read_memory. */
+	content: string;
+	createdAt: number;
+	updatedAt: number;
+}
+
 /** App-level settings persisted in IndexedDB. */
 export interface Settings {
 	id: 'app';

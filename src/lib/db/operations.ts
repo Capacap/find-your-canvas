@@ -12,7 +12,8 @@ import type {
 	Message,
 	StoredImage,
 	Settings,
-	ImageSource
+	ImageSource,
+	MemoryTopic
 } from '$lib/types/schema';
 
 // ── Helpers ──
@@ -77,7 +78,7 @@ export async function updateProject(
 }
 
 export async function deleteProject(id: string): Promise<void> {
-	await db.transaction('rw', [db.projects, db.designDocuments, db.conversations, db.messages, db.images], async () => {
+	await db.transaction('rw', [db.projects, db.designDocuments, db.conversations, db.messages, db.images, db.memoryTopics], async () => {
 		const conversationIds = await db.conversations
 			.where('projectId')
 			.equals(id)
@@ -92,6 +93,7 @@ export async function deleteProject(id: string): Promise<void> {
 
 		await db.conversations.where('projectId').equals(id).delete();
 		await db.images.where('projectId').equals(id).delete();
+		await db.memoryTopics.where('projectId').equals(id).delete();
 		await db.designDocuments.delete(id);
 		await db.projects.delete(id);
 	});
@@ -110,6 +112,63 @@ export async function updateDesignDocument(projectId: string, content: string): 
 		updatedAt: now()
 	});
 	await db.projects.update(projectId, { updatedAt: now() });
+}
+
+// ── Memory Topics ──
+
+export async function listMemoryTopics(projectId: string): Promise<MemoryTopic[]> {
+	return db.memoryTopics.where('projectId').equals(projectId).toArray();
+}
+
+export async function getMemoryTopicBySlug(projectId: string, slug: string): Promise<MemoryTopic | undefined> {
+	return db.memoryTopics.where('[projectId+slug]').equals([projectId, slug]).first();
+}
+
+/**
+ * Upsert a memory topic by [projectId, slug].
+ * If content is empty, deletes the topic.
+ */
+export async function upsertMemoryTopic(
+	projectId: string,
+	slug: string,
+	title: string,
+	summary: string,
+	content: string
+): Promise<void> {
+	const existing = await getMemoryTopicBySlug(projectId, slug);
+	const timestamp = now();
+
+	if (!content.trim()) {
+		// Empty content = delete.
+		if (existing) {
+			await db.memoryTopics.delete(existing.id);
+		}
+		await db.projects.update(projectId, { updatedAt: timestamp });
+		return;
+	}
+
+	if (existing) {
+		await db.memoryTopics.update(existing.id, {
+			title,
+			summary,
+			content,
+			updatedAt: timestamp
+		});
+	} else {
+		const topic: MemoryTopic = {
+			id: generateId(),
+			projectId,
+			slug,
+			title,
+			summary,
+			content,
+			createdAt: timestamp,
+			updatedAt: timestamp
+		};
+		await db.memoryTopics.add(topic);
+	}
+
+	await db.projects.update(projectId, { updatedAt: timestamp });
 }
 
 // ── Conversations ──

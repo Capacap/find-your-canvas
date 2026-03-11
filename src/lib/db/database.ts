@@ -5,7 +5,8 @@ import type {
 	Conversation,
 	Message,
 	StoredImage,
-	Settings
+	Settings,
+	MemoryTopic
 } from '$lib/types/schema';
 
 class BananaDB extends Dexie {
@@ -14,6 +15,7 @@ class BananaDB extends Dexie {
 	conversations!: EntityTable<Conversation, 'id'>;
 	messages!: EntityTable<Message, 'id'>;
 	images!: EntityTable<StoredImage, 'id'>;
+	memoryTopics!: EntityTable<MemoryTopic, 'id'>;
 	settings!: EntityTable<Settings, 'id'>;
 
 	constructor() {
@@ -31,6 +33,11 @@ class BananaDB extends Dexie {
 		// v2: adds thumbnail field to images (not indexed, no store change needed).
 		// Existing images will have thumbnail backfilled on first access.
 		this.version(2).stores({});
+
+		// v3: adds memoryTopics table for structured project memory.
+		this.version(3).stores({
+			memoryTopics: 'id, projectId, [projectId+slug]'
+		});
 	}
 }
 

@@ -71,9 +71,52 @@ export const toolDeclarations: FunctionDeclaration[] = [
 		}
 	},
 	{
+		name: 'read_memory',
+		description:
+			'Read the full content of a project memory topic by its slug. Use this to recall established decisions before making changes.',
+		parameters: {
+			type: Type.OBJECT,
+			properties: {
+				topic: {
+					type: Type.STRING,
+					description: 'The slug of the memory topic to read (from the memory index in the system prompt).'
+				}
+			},
+			required: ['topic']
+		}
+	},
+	{
+		name: 'update_memory',
+		description:
+			'Create, update, or delete a project memory topic. All fields are required on every call to keep the index coherent. To delete a topic, pass empty content.',
+		parameters: {
+			type: Type.OBJECT,
+			properties: {
+				topic: {
+					type: Type.STRING,
+					description:
+						'Slug for the topic. Use lowercase-kebab-case, e.g. "art-style", "characters", "world-rules". Must be unique within the project.'
+				},
+				title: {
+					type: Type.STRING,
+					description: 'Human-readable title for the topic.'
+				},
+				summary: {
+					type: Type.STRING,
+					description: '1-2 sentence summary shown in the memory index. Should capture the essence of the topic.'
+				},
+				content: {
+					type: Type.STRING,
+					description: 'Full markdown content. Pass empty string to delete the topic.'
+				}
+			},
+			required: ['topic', 'title', 'summary', 'content']
+		}
+	},
+	{
 		name: 'update_design_doc',
 		description:
-			'Update the project design document with new creative decisions. Provide the full updated content (replaces existing).',
+			'Deprecated. Use update_memory instead to store project decisions as structured memory topics.',
 		parameters: {
 			type: Type.OBJECT,
 			properties: {

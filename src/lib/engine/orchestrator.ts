@@ -9,12 +9,12 @@
  * 5. Yield final response to the UI
  */
 import type { Content, FunctionCall, Part } from '@google/genai';
-import type { DesignDocument, StoredImage } from '$lib/types/schema';
+import type { MemoryTopic, StoredImage } from '$lib/types/schema';
 import { sendMessage, generateImage, imageDataToBlob, blobToBase64, toolDeclarations } from './gemini';
 import {
 	systemTemplate,
-	designDocFullTemplate,
-	designDocEmptyTemplate,
+	memoryIndexTemplate,
+	memoryEmptyTemplate,
 	interpolate
 } from './prompts';
 import { getSettings, getImageThumbnailBase64 } from '$lib/db/operations';
@@ -28,6 +28,7 @@ export type OrchestratorEvent =
 	| { type: 'image_complete'; imageId: string; label: string }
 	| { type: 'image_viewing'; imageId: string; reason?: string }
 	| { type: 'design_doc_updated' }
+	| { type: 'memory_updated'; slug: string }
 	| { type: 'error'; message: string }
 	| { type: 'done'; assistantText: string; imageIds: string[] }
 	| { type: 'debug_system_prompt'; prompt: string }
@@ -43,15 +44,35 @@ const MAX_TOOL_ROUNDS = 5;
 
 // ── System prompt construction ──
 
+/** Threshold below which all topic content is inlined instead of just the index. */
+const INLINE_THRESHOLD = 4000;
+
+function buildMemorySection(topics: MemoryTopic[]): string {
+	if (topics.length === 0) return memoryEmptyTemplate;
+
+	const totalContentLength = topics.reduce((sum, t) => sum + t.content.length, 0);
+
+	if (totalContentLength <= INLINE_THRESHOLD) {
+		// Small project: inline everything so the agent doesn't need read_memory.
+		const sections = topics.map((t) =>
+			`### ${t.title} (\`${t.slug}\`)\n${t.content}`
+		);
+		return '## Project Memory\n\n' + sections.join('\n\n');
+	}
+
+	// Larger project: show index only, agent uses read_memory for full content.
+	const rows = topics.map((t) =>
+		`| \`${t.slug}\` | ${t.title} | ${t.summary} |`
+	).join('\n');
+	return interpolate(memoryIndexTemplate, { rows });
+}
+
 function buildSystemPrompt(
 	projectName: string,
-	designDoc: DesignDocument | undefined,
+	memoryTopics: MemoryTopic[],
 	projectImages: StoredImage[]
 ): string {
-	const designDocSection =
-		designDoc?.content
-			? interpolate(designDocFullTemplate, { content: designDoc.content })
-			: designDocEmptyTemplate;
+	const memorySection = buildMemorySection(memoryTopics);
 
 	let imageIndexSection = '';
 	if (projectImages.length > 0) {
@@ -84,7 +105,7 @@ function buildSystemPrompt(
 
 	return interpolate(systemTemplate, {
 		projectName,
-		designDocSection,
+		memorySection,
 		imageIndexSection
 	});
 }
@@ -184,13 +205,61 @@ async function executeToolCall(
 		};
 	}
 
-	if (name === 'update_design_doc') {
-		const content = args.content as string;
-		await ops.updateDesignDocument(projectId, content);
-		onEvent({ type: 'design_doc_updated' });
+	if (name === 'read_memory') {
+		const slug = args.topic as string;
+		const topic = await ops.getMemoryTopicBySlug(projectId, slug);
+
+		if (!topic) {
+			const allTopics = await ops.listMemoryTopics(projectId);
+			const available = allTopics.map((t) => t.slug).join(', ');
+			const hint = available
+				? `Topic "${slug}" not found. Available topics: ${available}`
+				: `Topic "${slug}" not found. No topics exist yet. Use update_memory to create one.`;
+			return {
+				responseParts: [{ functionResponse: { name, response: { error: hint } } }]
+			};
+		}
+
 		return {
 			responseParts: [
-				{ functionResponse: { name, response: { output: 'Design document updated successfully.' } } }
+				{ functionResponse: { name, response: { slug: topic.slug, title: topic.title, content: topic.content } } }
+			]
+		};
+	}
+
+	if (name === 'update_memory') {
+		const slug = args.topic as string;
+		const title = args.title as string;
+		const summary = args.summary as string;
+		const content = args.content as string;
+
+		await ops.upsertMemoryTopic(projectId, slug, title, summary, content);
+		onEvent({ type: 'memory_updated', slug });
+
+		const action = content.trim() ? 'updated' : 'deleted';
+		return {
+			responseParts: [
+				{ functionResponse: { name, response: { output: `Memory topic "${slug}" ${action}.` } } }
+			]
+		};
+	}
+
+	if (name === 'update_design_doc') {
+		// Deprecation shim: redirect to update_memory.
+		const content = args.content as string;
+		await ops.upsertMemoryTopic(
+			projectId,
+			'project-notes',
+			'Project Notes',
+			'General project decisions (migrated from design document).',
+			content
+		);
+		onEvent({ type: 'memory_updated', slug: 'project-notes' });
+		return {
+			responseParts: [
+				{ functionResponse: { name, response: {
+					output: 'Design document saved as memory topic "project-notes". Use update_memory instead of update_design_doc going forward. Consider splitting into focused topics.'
+				} } }
 			]
 		};
 	}
@@ -229,10 +298,10 @@ export async function runAgentTurn(
 		return;
 	}
 
-	const designDoc = await ops.getDesignDocument(projectId);
+	const memoryTopics = await ops.listMemoryTopics(projectId);
 	const projectImages = await ops.listProjectImages(projectId);
 
-	const systemPrompt = buildSystemPrompt(project.name, designDoc, projectImages);
+	const systemPrompt = buildSystemPrompt(project.name, memoryTopics, projectImages);
 	onEvent({ type: 'debug_system_prompt', prompt: systemPrompt });
 
 	const config = {

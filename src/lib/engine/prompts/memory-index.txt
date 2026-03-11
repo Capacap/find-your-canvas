@@ -1,0 +1,7 @@
+## Project Memory
+
+Established decisions and context, organized by topic. Use `read_memory` to fetch full content; use `update_memory` to create or revise topics.
+
+| Slug | Topic | Summary |
+|------|-------|---------|
+{{rows}}
