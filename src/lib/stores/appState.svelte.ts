@@ -1,7 +1,7 @@
 /**
  * Reactive app state using Svelte 5 runes.
  */
-import type { Project, Conversation, Message, DesignDocument, StoredImage, Settings, MemoryTopic } from '$lib/types/schema';
+import type { Project, Conversation, Message, StoredImage, Settings, MemoryTopic } from '$lib/types/schema';
 import * as ops from '$lib/db/operations';
 import { downloadProjectZip, importProject } from '$lib/db/zip';
 
@@ -12,7 +12,6 @@ let projects = $state<Project[]>([]);
 let conversations = $state<Conversation[]>([]);
 let messages = $state<Message[]>([]);
 let projectImages = $state<StoredImage[]>([]);
-let designDoc = $state<DesignDocument | null>(null);
 let memoryTopics = $state<MemoryTopic[]>([]);
 let settings = $state<Settings | null>(null);
 let isLoading = $state(false);
@@ -24,7 +23,6 @@ export function getAppState() {
 	return {
 		get currentProject() { return currentProject; },
 		get currentConversation() { return currentConversation; },
-		get designDoc() { return designDoc; },
 		get memoryTopics() { return memoryTopics; },
 		get projects() { return projects; },
 		get conversations() { return conversations; },
@@ -55,25 +53,25 @@ export async function selectProject(id: string): Promise<void> {
 	messages = [];
 	if (currentProject) {
 		conversations = await ops.listConversations(id);
-		designDoc = (await ops.getDesignDocument(id)) ?? null;
 		projectImages = await ops.listProjectImages(id);
 		memoryTopics = await ops.listMemoryTopics(id);
 
 		// Lazy migration: design doc -> memory topic.
-		if (designDoc?.content && memoryTopics.length === 0) {
-			await ops.upsertMemoryTopic(
-				id,
-				'project-notes',
-				'Project Notes',
-				'Migrated from original design document. Reorganize into specific topics.',
-				designDoc.content
-			);
-			await ops.updateDesignDocument(id, '');
-			designDoc = (await ops.getDesignDocument(id)) ?? null;
-			memoryTopics = await ops.listMemoryTopics(id);
+		if (memoryTopics.length === 0) {
+			const designDoc = await ops.getDesignDocument(id);
+			if (designDoc?.content) {
+				await ops.upsertMemoryTopic(
+					id,
+					'project-notes',
+					'Project Notes',
+					'Migrated from original design document. Reorganize into specific topics.',
+					designDoc.content
+				);
+				await ops.updateDesignDocument(id, '');
+				memoryTopics = await ops.listMemoryTopics(id);
+			}
 		}
 	} else {
-		designDoc = null;
 		projectImages = [];
 		memoryTopics = [];
 	}
@@ -111,7 +109,6 @@ export async function deleteCurrentProject(): Promise<void> {
 	messages = [];
 	conversations = [];
 	projectImages = [];
-	designDoc = null;
 	memoryTopics = [];
 	await ops.deleteProject(id);
 	await loadProjects();
@@ -143,12 +140,6 @@ export function appendMessage(msg: Message): void {
 export async function refreshMessages(): Promise<void> {
 	if (currentConversation) {
 		messages = await ops.listMessages(currentConversation.id);
-	}
-}
-
-export async function refreshDesignDoc(): Promise<void> {
-	if (currentProject) {
-		designDoc = (await ops.getDesignDocument(currentProject.id)) ?? null;
 	}
 }
 

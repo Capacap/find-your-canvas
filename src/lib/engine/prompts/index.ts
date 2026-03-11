@@ -7,8 +7,6 @@
  */
 
 import systemTemplate from './system.txt?raw';
-import designDocFullTemplate from './design-doc-full.txt?raw';
-import designDocEmptyTemplate from './design-doc-empty.txt?raw';
 import memoryIndexTemplate from './memory-index.txt?raw';
 import memoryEmptyTemplate from './memory-empty.txt?raw';
 
@@ -19,8 +17,6 @@ function interpolate(template: string, vars: Record<string, string>): string {
 
 export {
 	systemTemplate,
-	designDocFullTemplate,
-	designDocEmptyTemplate,
 	memoryIndexTemplate,
 	memoryEmptyTemplate,
 	interpolate

@@ -13,7 +13,6 @@
 		removeConversation,
 		renameConversation,
 		refreshMessages,
-		refreshDesignDoc,
 		refreshProjectImages,
 		refreshMemoryTopics,
 		getImageUrl,
@@ -141,14 +140,9 @@
 				resolveImageId(event.imageId);
 				statusText = `Generated: ${event.label}`;
 			}
-			else if (event.type === 'design_doc_updated') {
-				refreshDesignDoc();
+			else if (event.type === 'design_doc_updated' || event.type === 'memory_updated') {
 				refreshMemoryTopics();
-				statusText = 'Design document updated';
-			}
-			else if (event.type === 'memory_updated') {
-				refreshMemoryTopics();
-				statusText = `Memory updated: ${event.slug}`;
+				statusText = event.type === 'memory_updated' ? `Memory updated: ${event.slug}` : 'Memory updated';
 			}
 			else if (event.type === 'error') statusText = event.message;
 			else if (event.type === 'done') statusText = '';
@@ -865,13 +859,6 @@
 		margin: 0 0 0.75rem;
 		font-size: 0.9rem;
 		color: #f5c542;
-	}
-
-	.design-doc-content {
-		font-size: 0.85rem;
-		line-height: 1.6;
-		white-space: pre-wrap;
-		color: #ccc;
 	}
 
 	.memory-topic {
