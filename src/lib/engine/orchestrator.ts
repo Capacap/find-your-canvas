@@ -8,9 +8,9 @@
  * 4. Feed function results back and repeat if needed
  * 5. Yield final response to the UI
  */
-import type { Content, FunctionCall, Part } from '@google/genai';
+import { ThinkingLevel, type Content, type FunctionCall, type Part } from '@google/genai';
 import type { MemoryTopic, StoredImage } from '$lib/types/schema';
-import { sendMessage, generateImage, imageDataToBlob, blobToBase64, toolDeclarations } from './gemini';
+import { sendMessageStreaming, generateImage, imageDataToBlob, blobToBase64, toolDeclarations } from './gemini';
 import {
 	systemTemplate,
 	memoryIndexTemplate,
@@ -22,8 +22,9 @@ import * as ops from '$lib/db/operations';
 
 /** What the orchestrator emits to the UI as it works. */
 export type OrchestratorEvent =
-	| { type: 'thinking'; text: string }
-	| { type: 'text'; text: string }
+	| { type: 'text_delta'; text: string }
+	| { type: 'thought_delta'; text: string }
+	| { type: 'status'; text: string }
 	| { type: 'image_generating'; label: string }
 	| { type: 'image_complete'; imageId: string; label: string }
 	| { type: 'image_viewing'; imageId: string; reason?: string }
@@ -285,7 +286,8 @@ export async function runAgentTurn(
 
 	const config = {
 		systemInstruction: systemPrompt,
-		tools: [{ functionDeclarations: toolDeclarations }]
+		tools: [{ functionDeclarations: toolDeclarations }],
+		thinkingConfig: { includeThoughts: true, thinkingLevel: ThinkingLevel.LOW }
 	};
 
 	// Store and encode user-attached images.
@@ -306,7 +308,7 @@ export async function runAgentTurn(
 	let allImageIds: string[] = [];
 
 	for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-		onEvent({ type: 'thinking', text: round === 0 ? 'Thinking...' : 'Processing tool results...' });
+		onEvent({ type: 'status', text: round === 0 ? 'Thinking...' : 'Processing tool results...' });
 
 		// Summarize parts for debug (replace binary data with placeholders).
 		const debugParts = currentUserParts.map((p) => {
@@ -320,7 +322,7 @@ export async function runAgentTurn(
 		});
 		onEvent({ type: 'debug_request', round, parts: debugParts, historyLength: history.length });
 
-		const response = await sendMessage(
+		const { stream, getResult } = await sendMessageStreaming(
 			settings.geminiApiKey,
 			settings.textModel,
 			currentUserParts,
@@ -328,27 +330,45 @@ export async function runAgentTurn(
 			config
 		);
 
-		history = response.history;
+		let roundText = '';
+		const roundFunctionCalls: { name: string; args: unknown }[] = [];
+
+		for await (const chunk of stream) {
+			if (chunk.textDelta) {
+				roundText += chunk.textDelta;
+				onEvent({ type: 'text_delta', text: chunk.textDelta });
+			}
+			if (chunk.thoughtDelta) {
+				onEvent({ type: 'thought_delta', text: chunk.thoughtDelta });
+			}
+			if (chunk.functionCalls) {
+				for (const fc of chunk.functionCalls) {
+					roundFunctionCalls.push({ name: fc.name ?? 'unknown', args: fc.args });
+				}
+			}
+		}
+
+		const result = await getResult();
+		history = result.history;
 
 		onEvent({
 			type: 'debug_response',
 			round,
-			text: response.text,
-			functionCalls: response.functionCalls.map((fc) => ({ name: fc.name, args: fc.args }))
+			text: result.text,
+			functionCalls: roundFunctionCalls
 		});
 
-		if (response.text) {
-			allAssistantText += (allAssistantText ? '\n\n' : '') + response.text;
-			onEvent({ type: 'text', text: response.text });
+		if (roundText) {
+			allAssistantText += (allAssistantText ? '\n\n' : '') + roundText;
 		}
 
 		// No function calls means the agent is done.
-		if (response.functionCalls.length === 0) break;
+		if (result.functionCalls.length === 0) break;
 
 		// Execute function calls and collect response parts.
 		const allResponseParts: Part[] = [];
 
-		for (const call of response.functionCalls) {
+		for (const call of result.functionCalls) {
 			const callArgs = (call.args ?? {}) as Record<string, unknown>;
 			onEvent({ type: 'debug_tool_exec', name: call.name ?? 'unknown', args: callArgs });
 

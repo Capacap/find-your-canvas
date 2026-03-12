@@ -95,6 +95,6 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
 	id: 'app',
 	geminiApiKey: undefined,
-	textModel: 'gemini-3.1-flash-lite-preview',
+	textModel: 'gemini-3-flash-preview',
 	imageModel: 'gemini-3.1-flash-image-preview'
 };

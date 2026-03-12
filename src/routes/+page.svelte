@@ -37,6 +37,8 @@
 	let apiKeyInput = $state('');
 	let newProjectName = $state('');
 	let streamedEvents = $state<OrchestratorEvent[]>([]);
+	let streamingText = $state('');
+	let streamingThought = $state('');
 	let showMemoryPanel = $state(false);
 	let showImageGallery = $state(false);
 	let showDebug = $state(false);
@@ -123,6 +125,8 @@
 		userInput = '';
 		isRunning = true;
 		streamedEvents = [];
+		streamingText = '';
+		streamingThought = '';
 		statusText = 'Thinking...';
 
 		// Build conversation history from existing messages for the LLM.
@@ -134,7 +138,12 @@
 		const onEvent = (event: OrchestratorEvent) => {
 			streamedEvents = [...streamedEvents, event];
 
-			if (event.type === 'thinking') statusText = event.text;
+			if (event.type === 'text_delta') {
+				streamingText += event.text;
+				statusText = '';
+			} else if (event.type === 'thought_delta') {
+				streamingThought += event.text;
+			} else if (event.type === 'status') statusText = event.text;
 			else if (event.type === 'image_generating') statusText = `Generating: ${event.label}...`;
 			else if (event.type === 'image_complete') {
 				resolveImageId(event.imageId);
@@ -145,7 +154,9 @@
 				statusText = `Memory updated: ${event.slug}`;
 			}
 			else if (event.type === 'error') statusText = event.message;
-			else if (event.type === 'done') statusText = '';
+			else if (event.type === 'done') {
+				statusText = '';
+			}
 		};
 
 		const attachments: UserAttachment[] = filesToSend.map((f) => ({
@@ -164,6 +175,8 @@
 			);
 			await refreshMessages();
 			await refreshProjectImages();
+			streamingText = '';
+			streamingThought = '';
 
 			// Resolve any image references in the new messages.
 			for (const msg of app.messages) {
@@ -514,6 +527,20 @@
 							{/if}
 						</div>
 					{/each}
+
+					{#if streamingThought}
+						<div class="message assistant">
+							<div class="message-role">Thinking</div>
+							<div class="message-text thought-text">{streamingThought}</div>
+						</div>
+					{/if}
+
+					{#if streamingText}
+						<div class="message assistant">
+							<div class="message-role">Assistant</div>
+							<div class="message-text">{@html renderMessageText(streamingText)}</div>
+						</div>
+					{/if}
 
 					{#if statusText}
 						<div class="status">{statusText}</div>
@@ -1091,6 +1118,13 @@
 
 	.message.user .message-text {
 		background: #1a2a1a;
+	}
+
+	.thought-text {
+		background: #1a1a22;
+		color: #8888bb;
+		font-size: 0.85rem;
+		border-left: 2px solid #4444aa;
 	}
 
 	.message-images {

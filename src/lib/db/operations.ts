@@ -29,7 +29,8 @@ function now(): number {
 
 export async function getSettings(): Promise<Settings> {
 	const settings = await db.settings.get('app');
-	return settings ?? { ...DEFAULT_SETTINGS };
+	// Merge: stored API key + current defaults for model IDs.
+	return { ...DEFAULT_SETTINGS, geminiApiKey: settings?.geminiApiKey };
 }
 
 export async function updateSettings(patch: Partial<Omit<Settings, 'id'>>): Promise<void> {

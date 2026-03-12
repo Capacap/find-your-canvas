@@ -14,7 +14,6 @@ import {
 	type FunctionCall,
 	type FunctionDeclaration,
 	type GenerateContentConfig,
-	type GenerateContentResponse,
 	type Part
 } from '@google/genai';
 
@@ -135,37 +134,40 @@ export interface ParsedTextResponse {
 	history: Content[];
 }
 
-/** Extract text and function calls from a Gemini response. */
-function parseResponse(response: GenerateContentResponse): { text: string; functionCalls: FunctionCall[] } {
-	let text = '';
-	const functionCalls: FunctionCall[] = [];
-
-	if (response.candidates?.[0]?.content?.parts) {
-		for (const part of response.candidates[0].content.parts) {
-			if (part.text && !part.thought) {
-				text += part.text;
-			} else if (part.functionCall) {
-				functionCalls.push(part.functionCall);
-			}
-		}
-	}
-
-	return { text, functionCalls };
-}
-
 // ── Text / orchestration messaging ──
 
+/** A chunk emitted during streaming. */
+export interface StreamChunk {
+	textDelta?: string;
+	thoughtDelta?: string;
+	functionCalls?: FunctionCall[];
+}
+
 /**
- * Send a message to the LLM for reasoning/orchestration.
- * Returns text, any function calls the model wants to make, and updated history.
+ * Send a message to the LLM and stream the response.
+ *
+ * Yields StreamChunks as they arrive. After the generator is exhausted,
+ * call getResult() to retrieve the accumulated text, function calls, and
+ * updated chat history.
  */
-export async function sendMessage(
+export async function sendMessageStreaming(
 	apiKey: string,
 	modelId: string,
 	userParts: Part[],
 	history: Content[] = [],
 	config?: GenerateContentConfig
-): Promise<ParsedTextResponse> {
+): Promise<{
+	stream: AsyncGenerator<StreamChunk>;
+	getResult: () => Promise<ParsedTextResponse>;
+}> {
+	// TODO: remove before shipping
+	const debugParts = userParts.map((p) => {
+		if ('inlineData' in p && p.inlineData) return { inlineData: `[${p.inlineData.mimeType}]` };
+		if ('functionResponse' in p && p.functionResponse) return { functionResponse: p.functionResponse };
+		return p;
+	});
+	console.log(`[gemini] >>> ${modelId} | history: ${history.length} | parts:`, debugParts);
+
 	const client = getClient(apiKey);
 	const chat: Chat = client.chats.create({
 		model: modelId,
@@ -173,19 +175,89 @@ export async function sendMessage(
 		config
 	});
 
-	const response = await chat.sendMessage({ message: userParts });
-	const parsed = parseResponse(response);
+	const responseStream = await chat.sendMessageStream({ message: userParts });
 
-	return {
-		...parsed,
-		history: chat.getHistory
-			? await chat.getHistory()
-			: [
-					...history,
-					{ role: 'user', parts: userParts },
-					{ role: 'model', parts: response.candidates?.[0]?.content?.parts ?? [{ text: parsed.text }] }
-				]
-	};
+	let fullText = '';
+	const allFunctionCalls: FunctionCall[] = [];
+	let consumed = false;
+
+	// Gemini models emit junk text parts at the boundary between thought/
+	// function-call parts and the real response (digits, ",thought", etc.).
+	// We skip text parts that arrive before real content if they contain
+	// no letters. Once a part with actual prose arrives, everything flows
+	// through unfiltered.
+	let hadRealText = false;
+
+	let chunkIndex = 0;
+
+	async function* stream(): AsyncGenerator<StreamChunk> {
+		for await (const chunk of responseStream) {
+			const parts = chunk.candidates?.[0]?.content?.parts ?? [];
+			const out: StreamChunk = {};
+
+			// TODO: remove before shipping
+			const debugChunkParts = parts.map((p) => ({
+				...(p.text !== undefined && { text: p.text.slice(0, 120) + (p.text.length > 120 ? '...' : '') }),
+				...(p.thought && { thought: true }),
+				...(p.thoughtSignature && { sig: true }),
+				...(p.functionCall && { fn: p.functionCall.name, args: p.functionCall.args }),
+				...(('inlineData' in p && p.inlineData) && { img: p.inlineData.mimeType }),
+			}));
+			console.log(`[gemini] chunk ${chunkIndex++}:`, debugChunkParts);
+
+			for (const part of parts) {
+				if (part.functionCall) {
+					allFunctionCalls.push(part.functionCall);
+					if (!out.functionCalls) out.functionCalls = [];
+					out.functionCalls.push(part.functionCall);
+				} else if (part.thought || part.thoughtSignature) {
+					if (part.text) {
+						out.thoughtDelta = (out.thoughtDelta ?? '') + part.text;
+					}
+				} else if (part.text) {
+					if (!hadRealText && !/[a-zA-Z]/.test(part.text)) {
+						// Junk token before real content; skip it.
+						continue;
+					}
+					let text = part.text;
+					if (!hadRealText) {
+						// First real text part: strip any thought delimiter prefix.
+						text = text.replace(/^[\s,\-\d]*thought\s*/i, '');
+						if (!text) continue;
+					}
+					hadRealText = true;
+					out.textDelta = (out.textDelta ?? '') + text;
+					fullText += text;
+				}
+			}
+
+			if (out.textDelta || out.thoughtDelta || out.functionCalls) {
+				yield out;
+			}
+		}
+		consumed = true;
+	}
+
+	async function getResult(): Promise<ParsedTextResponse> {
+		if (!consumed) {
+			throw new Error('Stream must be fully consumed before calling getResult()');
+		}
+		// TODO: remove before shipping
+		console.log(`[gemini] <<< text: ${fullText.length} chars | functionCalls: ${allFunctionCalls.map((fc) => fc.name).join(', ') || 'none'}`);
+		return {
+			text: fullText,
+			functionCalls: allFunctionCalls,
+			history: chat.getHistory
+				? await chat.getHistory()
+				: [
+						...history,
+						{ role: 'user', parts: userParts },
+						{ role: 'model', parts: [{ text: fullText }] }
+					]
+		};
+	}
+
+	return { stream: stream(), getResult };
 }
 
 // ── Image generation (unchanged, no function calling needed here) ──
