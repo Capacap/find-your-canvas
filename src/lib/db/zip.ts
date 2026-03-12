@@ -8,7 +8,13 @@
  *   images/index.json  - image metadata (everything except the blob)
  */
 import JSZip from 'jszip';
-import { db } from './database';
+import { createThumbnail } from './thumbnail';
+import {
+	getProject,
+	getProjectExportData,
+	importProjectData,
+	type ProjectExportData
+} from './operations';
 import type {
 	Project,
 	Conversation,
@@ -51,39 +57,24 @@ function extensionForMime(mime: string): string {
 }
 
 export async function exportProject(projectId: string): Promise<Blob> {
-	const project = await db.projects.get(projectId);
-	if (!project) throw new Error(`Project ${projectId} not found`);
-
-	const conversations = await db.conversations
-		.where('projectId')
-		.equals(projectId)
-		.toArray();
-
-	const conversationIds = conversations.map((c) => c.id);
-	const messages =
-		conversationIds.length > 0
-			? await db.messages.where('conversationId').anyOf(conversationIds).toArray()
-			: [];
-
-	const images = await db.images.where('projectId').equals(projectId).toArray();
-	const memoryTopics = await db.memoryTopics.where('projectId').equals(projectId).toArray();
+	const data = await getProjectExportData(projectId);
 
 	const zip = new JSZip();
 
 	const manifest: ExportManifest = {
 		version: 1,
 		exportedAt: Date.now(),
-		project,
-		conversations,
-		messages,
-		memoryTopics
+		project: data.project,
+		conversations: data.conversations,
+		messages: data.messages,
+		memoryTopics: data.memoryTopics
 	};
 	zip.file('project.json', JSON.stringify(manifest, null, 2));
 
 	// Memory topics as individual markdown files.
-	if (memoryTopics.length > 0) {
+	if (data.memoryTopics.length > 0) {
 		const memoryFolder = zip.folder('memory')!;
-		for (const topic of memoryTopics) {
+		for (const topic of data.memoryTopics) {
 			memoryFolder.file(`${topic.slug}.md`, `# ${topic.title}\n\n${topic.content}`);
 		}
 	}
@@ -92,7 +83,7 @@ export async function exportProject(projectId: string): Promise<Blob> {
 	const imageIndex: ImageManifestEntry[] = [];
 	const imagesFolder = zip.folder('images')!;
 
-	for (const img of images) {
+	for (const img of data.images) {
 		const filename = img.id + extensionForMime(img.mimeType);
 		imagesFolder.file(filename, img.blob);
 		imageIndex.push({
@@ -134,7 +125,6 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
 		const file = zip.file('images/' + entry.filename);
 		if (!file) continue;
 		const imageBlob = new Blob([await file.async('blob')], { type: entry.mimeType });
-		const { createThumbnail } = await import('./thumbnail');
 		const thumbnail = await createThumbnail(imageBlob);
 		images.push({
 			id: entry.id,
@@ -152,26 +142,20 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
 		});
 	}
 
-	await db.transaction(
-		'rw',
-		[db.projects, db.conversations, db.messages, db.images, db.memoryTopics],
-		async () => {
-			await db.projects.put(manifest.project);
-			await db.conversations.bulkPut(manifest.conversations);
-			await db.messages.bulkPut(manifest.messages);
-			await db.images.bulkPut(images);
-			if (manifest.memoryTopics.length > 0) {
-				await db.memoryTopics.bulkPut(manifest.memoryTopics);
-			}
-		}
-	);
+	await importProjectData({
+		project: manifest.project,
+		conversations: manifest.conversations,
+		messages: manifest.messages,
+		images,
+		memoryTopics: manifest.memoryTopics
+	});
 
 	return manifest.project;
 }
 
 /** Trigger a download of the zip in the browser. */
 export async function downloadProjectZip(projectId: string): Promise<void> {
-	const project = await db.projects.get(projectId);
+	const project = await getProject(projectId);
 	const blob = await exportProject(projectId);
 	const url = URL.createObjectURL(blob);
 	const a = document.createElement('a');

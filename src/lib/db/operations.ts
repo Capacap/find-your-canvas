@@ -163,11 +163,11 @@ export async function createConversation(projectId: string, title: string): Prom
 }
 
 export async function listConversations(projectId: string): Promise<Conversation[]> {
-	return db.conversations
+	const convos = await db.conversations
 		.where('projectId')
 		.equals(projectId)
-		.reverse()
 		.sortBy('updatedAt');
+	return convos.reverse();
 }
 
 export async function updateConversation(
@@ -178,7 +178,13 @@ export async function updateConversation(
 }
 
 export async function deleteConversation(id: string): Promise<void> {
-	await db.transaction('rw', [db.conversations, db.messages], async () => {
+	await db.transaction('rw', [db.conversations, db.messages, db.images], async () => {
+		// Find images referenced by this conversation's messages and delete them.
+		const msgs = await db.messages.where('conversationId').equals(id).toArray();
+		const imageIds = msgs.flatMap((m) => m.imageIds);
+		if (imageIds.length > 0) {
+			await db.images.bulkDelete(imageIds);
+		}
 		await db.messages.where('conversationId').equals(id).delete();
 		await db.conversations.delete(id);
 	});
@@ -262,7 +268,31 @@ export async function listProjectImages(projectId: string): Promise<StoredImage[
 }
 
 export async function deleteImage(id: string): Promise<void> {
-	await db.images.delete(id);
+	const image = await db.images.get(id);
+	if (!image) return;
+
+	await db.transaction('rw', [db.images, db.messages], async () => {
+		await db.images.delete(id);
+
+		// Clean dangling refs from any messages that reference this image.
+		const projectConvos = await db.conversations
+			.where('projectId')
+			.equals(image.projectId)
+			.primaryKeys();
+		if (projectConvos.length === 0) return;
+
+		const msgs = await db.messages
+			.where('conversationId')
+			.anyOf(projectConvos)
+			.filter((m) => m.imageIds.includes(id))
+			.toArray();
+
+		for (const msg of msgs) {
+			await db.messages.update(msg.id, {
+				imageIds: msg.imageIds.filter((imgId) => imgId !== id)
+			});
+		}
+	});
 }
 
 /**
@@ -301,4 +331,57 @@ function blobToBase64String(blob: Blob): Promise<string> {
 		reader.onerror = reject;
 		reader.readAsDataURL(blob);
 	});
+}
+
+// ── Bulk export/import (used by zip.ts) ──
+
+export interface ProjectExportData {
+	project: Project;
+	conversations: Conversation[];
+	messages: Message[];
+	images: StoredImage[];
+	memoryTopics: MemoryTopic[];
+}
+
+export async function getProjectExportData(projectId: string): Promise<ProjectExportData> {
+	const project = await db.projects.get(projectId);
+	if (!project) throw new Error(`Project ${projectId} not found`);
+
+	const conversations = await db.conversations
+		.where('projectId')
+		.equals(projectId)
+		.toArray();
+
+	const conversationIds = conversations.map((c) => c.id);
+	const messages =
+		conversationIds.length > 0
+			? await db.messages.where('conversationId').anyOf(conversationIds).toArray()
+			: [];
+
+	const images = await db.images.where('projectId').equals(projectId).toArray();
+	const memoryTopics = await db.memoryTopics.where('projectId').equals(projectId).toArray();
+
+	return { project, conversations, messages, images, memoryTopics };
+}
+
+export async function importProjectData(data: {
+	project: Project;
+	conversations: Conversation[];
+	messages: Message[];
+	images: StoredImage[];
+	memoryTopics: MemoryTopic[];
+}): Promise<void> {
+	await db.transaction(
+		'rw',
+		[db.projects, db.conversations, db.messages, db.images, db.memoryTopics],
+		async () => {
+			await db.projects.put(data.project);
+			await db.conversations.bulkPut(data.conversations);
+			await db.messages.bulkPut(data.messages);
+			await db.images.bulkPut(data.images);
+			if (data.memoryTopics.length > 0) {
+				await db.memoryTopics.bulkPut(data.memoryTopics);
+			}
+		}
+	);
 }

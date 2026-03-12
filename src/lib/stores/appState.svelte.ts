@@ -14,7 +14,6 @@ let messages = $state<Message[]>([]);
 let projectImages = $state<StoredImage[]>([]);
 let memoryTopics = $state<MemoryTopic[]>([]);
 let settings = $state<Settings | null>(null);
-let isLoading = $state(false);
 
 // Image URL cache: imageId -> objectURL
 const imageUrlCache = new Map<string, string>();
@@ -28,9 +27,7 @@ export function getAppState() {
 		get conversations() { return conversations; },
 		get messages() { return messages; },
 		get projectImages() { return projectImages; },
-		get settings() { return settings; },
-		get isLoading() { return isLoading; },
-		set isLoading(v: boolean) { isLoading = v; }
+		get settings() { return settings; }
 	};
 }
 
@@ -59,6 +56,16 @@ export async function selectProject(id: string): Promise<void> {
 		projectImages = [];
 		memoryTopics = [];
 	}
+}
+
+export function deselectProject(): void {
+	revokeImageUrls();
+	currentProject = null;
+	currentConversation = null;
+	messages = [];
+	conversations = [];
+	projectImages = [];
+	memoryTopics = [];
 }
 
 export async function createNewProject(name: string): Promise<Project> {

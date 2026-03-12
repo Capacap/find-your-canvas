@@ -6,6 +6,7 @@
 		saveSettings,
 		loadProjects,
 		selectProject,
+		deselectProject,
 		createNewProject,
 		selectConversation,
 		createNewConversation,
@@ -21,9 +22,10 @@
 		importProjectZip,
 		removeImage
 	} from '$lib/stores/appState.svelte';
-	import { runAgentTurn, type OrchestratorEvent, type UserAttachment } from '$lib/engine/orchestrator';
+	import { runAgentTurn, type OrchestratorEvent, type UserAttachment, type TurnContext, type TurnActions } from '$lib/engine/orchestrator';
+	import { TEXT_MODEL, IMAGE_MODEL } from '$lib/types/schema';
+	import * as ops from '$lib/db/operations';
 	import { marked } from 'marked';
-	import type { Content } from '@google/genai';
 
 	// Configure marked for safe inline rendering.
 	marked.setOptions({ breaks: true, gfm: true });
@@ -32,6 +34,7 @@
 
 	let userInput = $state('');
 	let statusText = $state('');
+	let errorText = $state('');
 	let isRunning = $state(false);
 	let showSettings = $state(false);
 	let apiKeyInput = $state('');
@@ -112,6 +115,8 @@
 		const text = userInput.trim();
 		const filesToSend = [...pendingFiles];
 		pendingFiles = [];
+		for (const url of pendingFileUrls.values()) URL.revokeObjectURL(url);
+		pendingFileUrls = new Map();
 
 		// Auto-create a conversation if none selected, titled from the first message.
 		if (!app.currentConversation) {
@@ -128,12 +133,30 @@
 		streamingText = '';
 		streamingThought = '';
 		statusText = 'Thinking...';
+		errorText = '';
 
-		// Build conversation history from existing messages for the LLM.
-		const history: Content[] = app.messages.map((m) => ({
-			role: m.role === 'assistant' ? 'model' : 'user',
-			parts: [{ text: m.text }]
-		}));
+		const projectId = app.currentProject.id;
+		const conversationId = app.currentConversation!.id;
+
+		const ctx: TurnContext = {
+			apiKey: app.settings?.geminiApiKey ?? '',
+			textModel: TEXT_MODEL,
+			imageModel: IMAGE_MODEL,
+			projectName: app.currentProject.name,
+			memoryTopics: app.memoryTopics,
+			projectImages: app.projectImages,
+			messages: app.messages
+		};
+
+		const actions: TurnActions = {
+			storeImage: (blob, label, opts) => ops.storeImage(projectId, blob, label, opts),
+			getImage: ops.getImage,
+			getImageThumbnail: ops.getImageThumbnailBase64,
+			getMemoryTopicBySlug: (slug) => ops.getMemoryTopicBySlug(projectId, slug),
+			listMemoryTopics: () => ops.listMemoryTopics(projectId),
+			upsertMemoryTopic: (slug, title, summary, content) =>
+				ops.upsertMemoryTopic(projectId, slug, title, summary, content)
+		};
 
 		const onEvent = (event: OrchestratorEvent) => {
 			streamedEvents = [...streamedEvents, event];
@@ -153,7 +176,7 @@
 				refreshMemoryTopics();
 				statusText = `Memory updated: ${event.slug}`;
 			}
-			else if (event.type === 'error') statusText = event.message;
+			else if (event.type === 'error') errorText = event.message;
 			else if (event.type === 'done') {
 				statusText = '';
 			}
@@ -165,14 +188,14 @@
 		}));
 
 		try {
-			await runAgentTurn(
-				app.currentProject.id,
-				app.currentConversation!.id,
-				text,
-				history,
-				onEvent,
-				attachments
-			);
+			const result = await runAgentTurn(ctx, actions, text, onEvent, attachments);
+
+			// Persist messages from the turn result.
+			await ops.addMessage(conversationId, 'user', result.userText, result.userImageIds);
+			if (result.assistantText) {
+				await ops.addMessage(conversationId, 'assistant', result.assistantText, result.assistantImageIds);
+			}
+
 			await refreshMessages();
 			await refreshProjectImages();
 			streamingText = '';
@@ -185,7 +208,7 @@
 				}
 			}
 		} catch (err) {
-			statusText = `Error: ${err instanceof Error ? err.message : String(err)}`;
+			errorText = `Error: ${err instanceof Error ? err.message : String(err)}`;
 		} finally {
 			isRunning = false;
 		}
@@ -251,7 +274,27 @@
 		}
 	}
 
+	// Cache object URLs for pending files to avoid leaking on re-render.
+	let pendingFileUrls = $state<Map<File, string>>(new Map());
+
+	function getPendingFileUrl(file: File): string {
+		let url = pendingFileUrls.get(file);
+		if (!url) {
+			url = URL.createObjectURL(file);
+			pendingFileUrls = new Map(pendingFileUrls).set(file, url);
+		}
+		return url;
+	}
+
 	function removePendingFile(index: number) {
+		const file = pendingFiles[index];
+		const url = pendingFileUrls.get(file);
+		if (url) {
+			URL.revokeObjectURL(url);
+			const next = new Map(pendingFileUrls);
+			next.delete(file);
+			pendingFileUrls = next;
+		}
 		pendingFiles = pendingFiles.filter((_, i) => i !== index);
 	}
 
@@ -313,7 +356,7 @@
 		<h1>Banana Orchestra</h1>
 		<nav>
 			{#if app.currentProject}
-				<button onclick={() => { selectProject(''); revokeImageUrls(); }}>
+				<button onclick={() => deselectProject()}>
 					&larr; Projects
 				</button>
 				<span class="project-name">{app.currentProject.name}</span>
@@ -448,10 +491,9 @@
 					{#if app.projectImages.length === 0}
 						<p class="empty-state">No images yet. Ask the assistant to generate some, or upload reference material.</p>
 					{/if}
-					{#if userImages.length > 0}
-						<h4 class="gallery-section-title">Reference</h4>
+					{#snippet galleryGrid(images: typeof app.projectImages)}
 						<div class="image-gallery">
-							{#each userImages as img}
+							{#each images as img}
 								<div class="gallery-item">
 									<button
 										class="gallery-thumb"
@@ -471,30 +513,14 @@
 								</div>
 							{/each}
 						</div>
+					{/snippet}
+					{#if userImages.length > 0}
+						<h4 class="gallery-section-title">Reference</h4>
+						{@render galleryGrid(userImages)}
 					{/if}
 					{#if generatedImages.length > 0}
 						<h4 class="gallery-section-title">Generated</h4>
-						<div class="image-gallery">
-							{#each generatedImages as img}
-								<div class="gallery-item">
-									<button
-										class="gallery-thumb"
-										onclick={() => openLightbox(img.id)}
-										title={img.label}
-									>
-										{#if resolvedImageUrls[img.id]}
-											<img src={resolvedImageUrls[img.id]} alt={img.label} />
-										{/if}
-										<span class="gallery-label">{img.label}</span>
-									</button>
-									<button
-										class="gallery-delete"
-										onclick={() => handleDeleteImage(img.id, img.label)}
-										title="Delete image"
-									>&times;</button>
-								</div>
-							{/each}
-						</div>
+						{@render galleryGrid(generatedImages)}
 					{/if}
 				</aside>
 			{/if}
@@ -546,6 +572,10 @@
 						<div class="status">{statusText}</div>
 					{/if}
 
+					{#if errorText}
+						<div class="status error">{errorText}</div>
+					{/if}
+
 					{#if showDebug && streamedEvents.some((e) => e.type.startsWith('debug_'))}
 						<details class="debug-log" open>
 							<summary>Debug Log</summary>
@@ -592,7 +622,7 @@
 					<div class="pending-files">
 						{#each pendingFiles as file, i}
 							<div class="pending-thumb">
-								<img src={URL.createObjectURL(file)} alt={file.name} />
+								<img src={getPendingFileUrl(file)} alt={file.name} />
 								<button class="pending-remove" onclick={() => removePendingFile(i)}>&times;</button>
 							</div>
 						{/each}
@@ -1162,6 +1192,10 @@
 		color: #f5c542;
 		font-size: 0.85rem;
 		padding: 0.5rem;
+	}
+
+	.status.error {
+		color: #e55;
 	}
 
 	.chat.dragging {

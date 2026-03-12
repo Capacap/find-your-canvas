@@ -86,15 +86,13 @@ export interface MemoryTopic {
 export interface Settings {
 	id: 'app';
 	geminiApiKey?: string;
-	/** Which model to use for text orchestration. */
-	textModel: string;
-	/** Which model to use for image generation. */
-	imageModel: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
 	id: 'app',
-	geminiApiKey: undefined,
-	textModel: 'gemini-3-flash-preview',
-	imageModel: 'gemini-3.1-flash-image-preview'
+	geminiApiKey: undefined
 };
+
+/** Hardcoded model IDs. Not user-configurable. */
+export const TEXT_MODEL = 'gemini-3-flash-preview';
+export const IMAGE_MODEL = 'gemini-3.1-flash-image-preview';

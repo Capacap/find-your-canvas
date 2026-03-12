@@ -6,10 +6,13 @@
  * 2. Send user message to the LLM with native function declarations
  * 3. If the model returns function calls, execute them
  * 4. Feed function results back and repeat if needed
- * 5. Yield final response to the UI
+ * 5. Return final response for the caller to persist
+ *
+ * The engine has no direct database dependencies. All state is provided
+ * via TurnContext, and all side effects go through TurnActions.
  */
 import { ThinkingLevel, type Content, type FunctionCall, type Part } from '@google/genai';
-import type { MemoryTopic, StoredImage } from '$lib/types/schema';
+import type { Message, MemoryTopic, StoredImage, ImageSource } from '$lib/types/schema';
 import { sendMessageStreaming, generateImage, imageDataToBlob, blobToBase64, toolDeclarations } from './gemini';
 import {
 	systemTemplate,
@@ -17,8 +20,6 @@ import {
 	memoryEmptyTemplate,
 	interpolate
 } from './prompts';
-import { getSettings, getImageThumbnailBase64 } from '$lib/db/operations';
-import * as ops from '$lib/db/operations';
 
 /** What the orchestrator emits to the UI as it works. */
 export type OrchestratorEvent =
@@ -38,6 +39,35 @@ export type OrchestratorEvent =
 	| { type: 'debug_tool_result'; name: string; result: unknown };
 
 export type EventCallback = (event: OrchestratorEvent) => void;
+
+/** Pre-fetched context for an agent turn. */
+export interface TurnContext {
+	apiKey: string;
+	textModel: string;
+	imageModel: string;
+	projectName: string;
+	memoryTopics: MemoryTopic[];
+	projectImages: StoredImage[];
+	messages: Message[];
+}
+
+/** Side effects the orchestrator can perform during tool execution. */
+export interface TurnActions {
+	storeImage(blob: Blob, label: string, opts?: { source?: ImageSource; generationContext?: string }): Promise<StoredImage>;
+	getImage(id: string): Promise<StoredImage | undefined>;
+	getImageThumbnail(id: string): Promise<{ base64: string; mimeType: string } | undefined>;
+	getMemoryTopicBySlug(slug: string): Promise<MemoryTopic | undefined>;
+	listMemoryTopics(): Promise<MemoryTopic[]>;
+	upsertMemoryTopic(slug: string, title: string, summary: string, content: string): Promise<void>;
+}
+
+/** What the caller needs to persist after a turn completes. */
+export interface TurnResult {
+	userText: string;
+	userImageIds: string[];
+	assistantText: string;
+	assistantImageIds: string[];
+}
 
 /** Maximum tool-call rounds before we force a stop. */
 const MAX_TOOL_ROUNDS = 5;
@@ -110,6 +140,16 @@ function buildSystemPrompt(
 	});
 }
 
+// ── History conversion ──
+
+/** Convert stored messages to Gemini Content[] for the API. */
+function buildHistory(messages: Message[]): Content[] {
+	return messages.map((m) => ({
+		role: m.role === 'assistant' ? 'model' : 'user',
+		parts: [{ text: m.text }]
+	}));
+}
+
 // ── Tool execution ──
 
 interface ToolExecResult {
@@ -121,9 +161,8 @@ interface ToolExecResult {
 
 async function executeToolCall(
 	call: FunctionCall,
-	projectId: string,
-	apiKey: string,
-	imageModel: string,
+	ctx: TurnContext,
+	actions: TurnActions,
 	onEvent: EventCallback
 ): Promise<ToolExecResult> {
 	const args = call.args ?? {};
@@ -141,26 +180,24 @@ async function executeToolCall(
 			// Fetch reference images and convert to base64 for the image model.
 			const inputImages: Array<{ data: string; mimeType: string }> = [];
 			for (const refId of refIds) {
-				const img = await ops.getImage(refId);
+				const img = await actions.getImage(refId);
 				if (img) {
 					const data = await blobToBase64(img.blob);
 					inputImages.push({ data, mimeType: img.mimeType });
 				}
 			}
 
-			const imageResponse = await generateImage(apiKey, imageModel, prompt, {
+			const imageResponse = await generateImage(ctx.apiKey, ctx.imageModel, prompt, {
 				aspectRatio,
 				inputImages: inputImages.length > 0 ? inputImages : undefined
 			});
 			const blob = imageDataToBlob(imageResponse.imageData, imageResponse.mimeType);
-			const stored = await ops.storeImage(projectId, blob, label, {
-				generationContext: prompt
-			});
+			const stored = await actions.storeImage(blob, label, { generationContext: prompt });
 
 			onEvent({ type: 'image_complete', imageId: stored.id, label });
 
 			// Return the thumbnail so the model can see what was generated.
-			const thumb = await getImageThumbnailBase64(stored.id);
+			const thumb = await actions.getImageThumbnail(stored.id);
 			const parts: Part[] = [
 				{
 					functionResponse: {
@@ -188,43 +225,60 @@ async function executeToolCall(
 
 		onEvent({ type: 'image_viewing', imageId, reason });
 
-		const thumb = await getImageThumbnailBase64(imageId);
-		if (!thumb) {
+		try {
+			const thumb = await actions.getImageThumbnail(imageId);
+			if (!thumb) {
+				return {
+					responseParts: [
+						{ functionResponse: { name, response: { error: `Image not found: ${imageId}` } } }
+					]
+				};
+			}
+
 			return {
 				responseParts: [
-					{ functionResponse: { name, response: { error: `Image not found: ${imageId}` } } }
+					{ functionResponse: { name, response: { output: `Showing image ${imageId}` } } },
+					{ inlineData: { data: thumb.base64, mimeType: thumb.mimeType } }
 				]
 			};
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			onEvent({ type: 'error', message: `Failed to view image: ${msg}` });
+			return {
+				responseParts: [{ functionResponse: { name, response: { error: msg } } }]
+			};
 		}
-
-		return {
-			responseParts: [
-				{ functionResponse: { name, response: { output: `Showing image ${imageId}` } } },
-				{ inlineData: { data: thumb.base64, mimeType: thumb.mimeType } }
-			]
-		};
 	}
 
 	if (name === 'read_memory') {
 		const slug = args.topic as string;
-		const topic = await ops.getMemoryTopicBySlug(projectId, slug);
 
-		if (!topic) {
-			const allTopics = await ops.listMemoryTopics(projectId);
-			const available = allTopics.map((t) => t.slug).join(', ');
-			const hint = available
-				? `Topic "${slug}" not found. Available topics: ${available}`
-				: `Topic "${slug}" not found. No topics exist yet. Use update_memory to create one.`;
+		try {
+			const topic = await actions.getMemoryTopicBySlug(slug);
+
+			if (!topic) {
+				const allTopics = await actions.listMemoryTopics();
+				const available = allTopics.map((t) => t.slug).join(', ');
+				const hint = available
+					? `Topic "${slug}" not found. Available topics: ${available}`
+					: `Topic "${slug}" not found. No topics exist yet. Use update_memory to create one.`;
+				return {
+					responseParts: [{ functionResponse: { name, response: { error: hint } } }]
+				};
+			}
+
 			return {
-				responseParts: [{ functionResponse: { name, response: { error: hint } } }]
+				responseParts: [
+					{ functionResponse: { name, response: { slug: topic.slug, title: topic.title, content: topic.content } } }
+				]
+			};
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			onEvent({ type: 'error', message: `Failed to read memory: ${msg}` });
+			return {
+				responseParts: [{ functionResponse: { name, response: { error: msg } } }]
 			};
 		}
-
-		return {
-			responseParts: [
-				{ functionResponse: { name, response: { slug: topic.slug, title: topic.title, content: topic.content } } }
-			]
-		};
 	}
 
 	if (name === 'update_memory') {
@@ -233,15 +287,23 @@ async function executeToolCall(
 		const summary = args.summary as string;
 		const content = args.content as string;
 
-		await ops.upsertMemoryTopic(projectId, slug, title, summary, content);
-		onEvent({ type: 'memory_updated', slug });
+		try {
+			await actions.upsertMemoryTopic(slug, title, summary, content);
+			onEvent({ type: 'memory_updated', slug });
 
-		const action = content.trim() ? 'updated' : 'deleted';
-		return {
-			responseParts: [
-				{ functionResponse: { name, response: { output: `Memory topic "${slug}" ${action}.` } } }
-			]
-		};
+			const action = content.trim() ? 'updated' : 'deleted';
+			return {
+				responseParts: [
+					{ functionResponse: { name, response: { output: `Memory topic "${slug}" ${action}.` } } }
+				]
+			};
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			onEvent({ type: 'error', message: `Failed to update memory: ${msg}` });
+			return {
+				responseParts: [{ functionResponse: { name, response: { error: msg } } }]
+			};
+		}
 	}
 
 	return {
@@ -259,29 +321,20 @@ export interface UserAttachment {
 }
 
 export async function runAgentTurn(
-	projectId: string,
-	conversationId: string,
+	ctx: TurnContext,
+	actions: TurnActions,
 	userText: string,
-	conversationHistory: Content[],
 	onEvent: EventCallback,
 	attachments: UserAttachment[] = []
-): Promise<void> {
-	const settings = await getSettings();
-	if (!settings.geminiApiKey) {
+): Promise<TurnResult> {
+	const emptyResult: TurnResult = { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [] };
+
+	if (!ctx.apiKey) {
 		onEvent({ type: 'error', message: 'No API key configured. Add your Gemini API key in settings.' });
-		return;
+		return emptyResult;
 	}
 
-	const project = await ops.getProject(projectId);
-	if (!project) {
-		onEvent({ type: 'error', message: 'Project not found.' });
-		return;
-	}
-
-	const memoryTopics = await ops.listMemoryTopics(projectId);
-	const projectImages = await ops.listProjectImages(projectId);
-
-	const systemPrompt = buildSystemPrompt(project.name, memoryTopics, projectImages);
+	const systemPrompt = buildSystemPrompt(ctx.projectName, ctx.memoryTopics, ctx.projectImages);
 	onEvent({ type: 'debug_system_prompt', prompt: systemPrompt });
 
 	const config = {
@@ -294,7 +347,7 @@ export async function runAgentTurn(
 	const userImageIds: string[] = [];
 	const userImageParts: Part[] = [];
 	for (const attachment of attachments) {
-		const stored = await ops.storeImage(projectId, attachment.blob, attachment.label, { source: 'user' });
+		const stored = await actions.storeImage(attachment.blob, attachment.label, { source: 'user' });
 		userImageIds.push(stored.id);
 		const base64 = await blobToBase64(attachment.blob);
 		userImageParts.push({
@@ -302,7 +355,7 @@ export async function runAgentTurn(
 		});
 	}
 
-	let history = [...conversationHistory];
+	let history = buildHistory(ctx.messages);
 	let currentUserParts: Part[] = [{ text: userText }, ...userImageParts];
 	let allAssistantText = '';
 	let allImageIds: string[] = [];
@@ -323,8 +376,8 @@ export async function runAgentTurn(
 		onEvent({ type: 'debug_request', round, parts: debugParts, historyLength: history.length });
 
 		const { stream, getResult } = await sendMessageStreaming(
-			settings.geminiApiKey,
-			settings.textModel,
+			ctx.apiKey,
+			ctx.textModel,
 			currentUserParts,
 			history,
 			config
@@ -374,9 +427,8 @@ export async function runAgentTurn(
 
 			const { responseParts, imageId } = await executeToolCall(
 				call,
-				projectId,
-				settings.geminiApiKey,
-				settings.imageModel,
+				ctx,
+				actions,
 				onEvent
 			);
 
@@ -398,17 +450,25 @@ export async function runAgentTurn(
 
 		// Feed function results (and any inline images) back as the next message.
 		currentUserParts = allResponseParts;
+
+		if (round === MAX_TOOL_ROUNDS - 1) {
+			onEvent({ type: 'error', message: `Agent stopped after ${MAX_TOOL_ROUNDS} tool rounds. Some pending tool calls were not executed.` });
+		}
 	}
 
-	// Store user message with any attached image refs.
+	// Build the final texts with image references for the caller to persist.
 	const userImageRefs = userImageIds.map((id) => `[image:${id}]`).join(' ');
-	const userFullText = userImageRefs ? `${userText}\n\n${userImageRefs}` : userText;
-	await ops.addMessage(conversationId, 'user', userFullText, userImageIds);
+	const finalUserText = userImageRefs ? `${userText}\n\n${userImageRefs}` : userText;
 
-	// Store the final assistant message.
 	const imageRefs = allImageIds.map((id) => `[image:${id}]`).join(' ');
-	const fullText = imageRefs ? `${allAssistantText}\n\n${imageRefs}` : allAssistantText;
-	await ops.addMessage(conversationId, 'assistant', fullText, allImageIds);
+	const finalAssistantText = imageRefs ? `${allAssistantText}\n\n${imageRefs}` : allAssistantText;
 
-	onEvent({ type: 'done', assistantText: fullText, imageIds: allImageIds });
+	onEvent({ type: 'done', assistantText: finalAssistantText, imageIds: allImageIds });
+
+	return {
+		userText: finalUserText,
+		userImageIds,
+		assistantText: finalAssistantText,
+		assistantImageIds: allImageIds
+	};
 }

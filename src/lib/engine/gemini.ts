@@ -222,7 +222,7 @@ export async function sendMessageStreaming(
 					let text = part.text;
 					if (!hadRealText) {
 						// First real text part: strip any thought delimiter prefix.
-						text = text.replace(/^[\s,\-\d]*thought\s*/i, '');
+						text = text.replace(/^[\s,\-\d]*thought\b\s*/i, '');
 						if (!text) continue;
 					}
 					hadRealText = true;
