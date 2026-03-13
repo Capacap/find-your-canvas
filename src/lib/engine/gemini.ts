@@ -8,111 +8,12 @@
  */
 import {
 	GoogleGenAI,
-	Type,
 	type Chat,
 	type Content,
 	type FunctionCall,
-	type FunctionDeclaration,
 	type GenerateContentConfig,
 	type Part
 } from '@google/genai';
-
-// ── Tool declarations for native function calling ──
-
-export const toolDeclarations: FunctionDeclaration[] = [
-	{
-		name: 'generate_image',
-		description:
-			'Generate or transform an image. For new images, write a full scene prompt. For edits or transformations of existing images, pass the source image in reference_image_ids and write a short directive prompt describing what to change.',
-		parameters: {
-			type: Type.OBJECT,
-			properties: {
-				prompt: {
-					type: Type.STRING,
-					description: 'Detailed image generation prompt incorporating project context.'
-				},
-				label: {
-					type: Type.STRING,
-					description: 'Short human-readable label for the image (e.g. "forest_clearing").'
-				},
-				aspect_ratio: {
-					type: Type.STRING,
-					description:
-						'Aspect ratio. One of: 1:1, 2:3, 3:2, 3:4, 4:3, 9:16, 16:9, 21:9. Defaults to 1:1.'
-				},
-				reference_image_ids: {
-					type: Type.ARRAY,
-					items: { type: Type.STRING },
-					description:
-						'IDs of project images to use as visual input. Use for style reference, character consistency, image editing, or combining elements. Always pair with prompt instructions explaining how each image should be used.'
-				}
-			},
-			required: ['prompt', 'label']
-		}
-	},
-	{
-		name: 'view_image',
-		description:
-			'View a project image by its ID. Returns the image so you can see its contents. Use this when you need to reference, compare, or iterate on a previous image.',
-		parameters: {
-			type: Type.OBJECT,
-			properties: {
-				image_id: {
-					type: Type.STRING,
-					description: 'The ID of the image to view (from the project images index).'
-				},
-				reason: {
-					type: Type.STRING,
-					description: 'Brief note on why you need to see this image (helps the user follow your thinking).'
-				}
-			},
-			required: ['image_id']
-		}
-	},
-	{
-		name: 'read_memory',
-		description:
-			'Read the full content of a project memory topic by its slug. Use this to recall established decisions before making changes.',
-		parameters: {
-			type: Type.OBJECT,
-			properties: {
-				topic: {
-					type: Type.STRING,
-					description: 'The slug of the memory topic to read (from the memory index in the system prompt).'
-				}
-			},
-			required: ['topic']
-		}
-	},
-	{
-		name: 'update_memory',
-		description:
-			'Create, update, or delete a project memory topic. All fields are required on every call to keep the index coherent. To delete a topic, pass empty content.',
-		parameters: {
-			type: Type.OBJECT,
-			properties: {
-				topic: {
-					type: Type.STRING,
-					description:
-						'Slug for the topic. Use lowercase-kebab-case, e.g. "art-style", "characters", "world-rules". Must be unique within the project.'
-				},
-				title: {
-					type: Type.STRING,
-					description: 'Human-readable title for the topic.'
-				},
-				summary: {
-					type: Type.STRING,
-					description: '1-2 sentence summary shown in the memory index. Should capture the essence of the topic.'
-				},
-				content: {
-					type: Type.STRING,
-					description: 'Full markdown content. Pass empty string to delete the topic.'
-				}
-			},
-			required: ['topic', 'title', 'summary', 'content']
-		}
-	}
-];
 
 // ── Client singleton ──
 
@@ -126,7 +27,27 @@ function getClient(apiKey: string): GoogleGenAI {
 	return clientInstance;
 }
 
-// ── Response parsing helpers ──
+// ── Shared helpers ──
+
+/**
+ * Retrieve chat history, falling back to manual construction if the SDK
+ * method isn't available.
+ */
+function getChatHistory(
+	chat: Chat,
+	fallbackHistory: Content[],
+	userParts: Part[],
+	modelParts: Part[]
+): Content[] {
+	if (chat.getHistory) return chat.getHistory();
+	return [
+		...fallbackHistory,
+		{ role: 'user', parts: userParts },
+		{ role: 'model', parts: modelParts }
+	];
+}
+
+// ── Exported types ──
 
 export interface ParsedTextResponse {
 	text: string;
@@ -134,14 +55,21 @@ export interface ParsedTextResponse {
 	history: Content[];
 }
 
-// ── Text / orchestration messaging ──
-
 /** A chunk emitted during streaming. */
 export interface StreamChunk {
 	textDelta?: string;
 	thoughtDelta?: string;
 	functionCalls?: FunctionCall[];
 }
+
+export interface GeminiImageResponse {
+	text: string;
+	imageData: Uint8Array;
+	mimeType: string;
+	history: Content[];
+}
+
+// ── Streaming text/tool messaging ──
 
 /**
  * Send a message to the LLM and stream the response.
@@ -247,27 +175,14 @@ export async function sendMessageStreaming(
 		return {
 			text: fullText,
 			functionCalls: allFunctionCalls,
-			history: chat.getHistory
-				? await chat.getHistory()
-				: [
-						...history,
-						{ role: 'user', parts: userParts },
-						{ role: 'model', parts: [{ text: fullText }] }
-					]
+			history: getChatHistory(chat, history, userParts, [{ text: fullText }])
 		};
 	}
 
 	return { stream: stream(), getResult };
 }
 
-// ── Image generation (unchanged, no function calling needed here) ──
-
-export interface GeminiImageResponse {
-	text: string;
-	imageData: Uint8Array;
-	mimeType: string;
-	history: Content[];
-}
+// ── Image generation ──
 
 /**
  * Generate an image using a Gemini image model.
@@ -280,16 +195,13 @@ export async function generateImage(
 		history?: Content[];
 		inputImages?: Array<{ data: string; mimeType: string }>;
 		aspectRatio?: string;
-		imageSize?: string;
 	} = {}
 ): Promise<GeminiImageResponse> {
 	const client = getClient(apiKey);
 
 	const config: GenerateContentConfig = {};
-	if (options.aspectRatio || options.imageSize) {
-		config.imageConfig = {};
-		if (options.aspectRatio) config.imageConfig.aspectRatio = options.aspectRatio;
-		if (options.imageSize) config.imageConfig.imageSize = options.imageSize;
+	if (options.aspectRatio) {
+		config.imageConfig = { aspectRatio: options.aspectRatio };
 	}
 
 	const chat: Chat = client.chats.create({
@@ -332,48 +244,12 @@ export async function generateImage(
 		throw new Error('Image model did not return an image. Response text: ' + text);
 	}
 
+	const responseParts = response.candidates?.[0]?.content?.parts ?? [];
+
 	return {
 		text,
 		imageData,
 		mimeType,
-		history: chat.getHistory
-			? await chat.getHistory()
-			: [
-					...(options.history ?? []),
-					{ role: 'user', parts },
-					{ role: 'model', parts: response.candidates?.[0]?.content?.parts ?? [] }
-				]
+		history: getChatHistory(chat, options.history ?? [], parts, responseParts)
 	};
-}
-
-// ── Utility ──
-
-/**
- * Convert a Blob to a base64 string suitable for the Gemini API.
- */
-export function blobToBase64(blob: Blob): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = () => {
-			const result = reader.result as string;
-			resolve(result.split(',')[1]);
-		};
-		reader.onerror = reject;
-		reader.readAsDataURL(blob);
-	});
-}
-
-/**
- * Convert base64 or Uint8Array image data from the API response to a Blob.
- */
-export function imageDataToBlob(data: Uint8Array | string, mimeType: string): Blob {
-	if (typeof data === 'string') {
-		const binary = atob(data);
-		const bytes = new Uint8Array(binary.length);
-		for (let i = 0; i < binary.length; i++) {
-			bytes[i] = binary.charCodeAt(i);
-		}
-		return new Blob([bytes], { type: mimeType });
-	}
-	return new Blob([data as BlobPart], { type: mimeType });
 }

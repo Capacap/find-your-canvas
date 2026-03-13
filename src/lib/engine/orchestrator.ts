@@ -11,9 +11,10 @@
  * The engine has no direct database dependencies. All state is provided
  * via TurnContext, and all side effects go through TurnActions.
  */
-import { ThinkingLevel, type Content, type FunctionCall, type Part } from '@google/genai';
+import { ThinkingLevel, Type, type Content, type FunctionCall, type FunctionDeclaration, type Part } from '@google/genai';
 import type { Message, MemoryTopic, StoredImage, ImageSource } from '$lib/types/schema';
-import { sendMessageStreaming, generateImage, imageDataToBlob, blobToBase64, toolDeclarations } from './gemini';
+import { sendMessageStreaming, generateImage } from './gemini';
+import { blobToBase64, imageDataToBlob } from './utils';
 import {
 	systemTemplate,
 	memoryIndexTemplate,
@@ -185,6 +186,103 @@ function appendImageRefs(text: string, imageIds: string[]): string {
 	const refs = imageIds.map((id) => `[image:${id}]`).join(' ');
 	return `${text}\n\n${refs}`;
 }
+
+// ── Tool declarations ──
+
+const toolDeclarations: FunctionDeclaration[] = [
+	{
+		name: 'generate_image',
+		description:
+			'Generate or transform an image. For new images, write a full scene prompt. For edits or transformations of existing images, pass the source image in reference_image_ids and write a short directive prompt describing what to change.',
+		parameters: {
+			type: Type.OBJECT,
+			properties: {
+				prompt: {
+					type: Type.STRING,
+					description: 'Detailed image generation prompt incorporating project context.'
+				},
+				label: {
+					type: Type.STRING,
+					description: 'Short human-readable label for the image (e.g. "forest_clearing").'
+				},
+				aspect_ratio: {
+					type: Type.STRING,
+					description:
+						'Aspect ratio. One of: 1:1, 2:3, 3:2, 3:4, 4:3, 9:16, 16:9, 21:9. Defaults to 1:1.'
+				},
+				reference_image_ids: {
+					type: Type.ARRAY,
+					items: { type: Type.STRING },
+					description:
+						'IDs of project images to use as visual input. Use for style reference, character consistency, image editing, or combining elements. Always pair with prompt instructions explaining how each image should be used.'
+				}
+			},
+			required: ['prompt', 'label']
+		}
+	},
+	{
+		name: 'view_image',
+		description:
+			'View a project image by its ID. Returns the image so you can see its contents. Use this when you need to reference, compare, or iterate on a previous image.',
+		parameters: {
+			type: Type.OBJECT,
+			properties: {
+				image_id: {
+					type: Type.STRING,
+					description: 'The ID of the image to view (from the project images index).'
+				},
+				reason: {
+					type: Type.STRING,
+					description: 'Brief note on why you need to see this image (helps the user follow your thinking).'
+				}
+			},
+			required: ['image_id']
+		}
+	},
+	{
+		name: 'read_memory',
+		description:
+			'Read the full content of a project memory topic by its slug. Use this to recall established decisions before making changes.',
+		parameters: {
+			type: Type.OBJECT,
+			properties: {
+				topic: {
+					type: Type.STRING,
+					description: 'The slug of the memory topic to read (from the memory index in the system prompt).'
+				}
+			},
+			required: ['topic']
+		}
+	},
+	{
+		name: 'update_memory',
+		description:
+			'Create, update, or delete a project memory topic. All fields are required on every call to keep the index coherent. To delete a topic, pass empty content.',
+		parameters: {
+			type: Type.OBJECT,
+			properties: {
+				topic: {
+					type: Type.STRING,
+					description:
+						'Slug for the topic. Use lowercase-kebab-case, e.g. "art-style", "characters", "world-rules". Must be unique within the project.'
+				},
+				title: {
+					type: Type.STRING,
+					description: 'Human-readable title for the topic.'
+				},
+				summary: {
+					type: Type.STRING,
+					description: '1-2 sentence summary shown in the memory index. Should capture the essence of the topic.'
+				},
+				content: {
+					type: Type.STRING,
+					description: 'Full markdown content. Pass empty string to delete the topic.'
+				}
+			},
+			required: ['topic', 'title', 'summary', 'content']
+		}
+	}
+];
 
 // ── Tool execution ──
 
