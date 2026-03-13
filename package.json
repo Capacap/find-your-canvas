@@ -30,6 +30,7 @@
 	},
 	"dependencies": {
 		"@google/genai": "^1.44.0",
+		"client-zip": "^2.5.0",
 		"dexie": "^4.3.0",
 		"jszip": "^3.10.1",
 		"marked": "^17.0.4"

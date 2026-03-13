@@ -8,6 +8,7 @@
  *   images/index.json  - image metadata (everything except the blob)
  */
 import JSZip from 'jszip';
+import { downloadZip } from 'client-zip';
 import { createThumbnail } from './thumbnail';
 import {
 	getProject,
@@ -61,8 +62,6 @@ function extensionForMime(mime: string): string {
 export async function exportProject(projectId: string): Promise<Blob> {
 	const data = await getProjectExportData(projectId);
 
-	const zip = new JSZip();
-
 	const manifest: ExportManifest = {
 		version: 1,
 		exportedAt: Date.now(),
@@ -71,45 +70,42 @@ export async function exportProject(projectId: string): Promise<Blob> {
 		messages: data.messages,
 		agentMemories: data.agentMemories
 	};
-	zip.file('project.json', JSON.stringify(manifest, null, 2));
 
-	// Memory topics as individual markdown files.
-	if (data.agentMemories.length > 0) {
-		const memoryFolder = zip.folder('memory')!;
+	// Build the image index from metadata (no blobs needed).
+	const imageIndex: ImageManifestEntry[] = data.imageMeta.map((meta) => ({
+		id: meta.id,
+		projectId: meta.projectId,
+		messageId: meta.messageId,
+		source: meta.source,
+		mimeType: meta.mimeType,
+		width: meta.width,
+		height: meta.height,
+		label: meta.label,
+		generationContext: meta.generationContext,
+		createdAt: meta.createdAt,
+		filename: meta.id + extensionForMime(meta.mimeType)
+	}));
+
+	// Yield zip entries one at a time via async generator so only one
+	// image blob is in memory at a time during zip construction.
+	async function* entries() {
+		yield { name: 'project.json', input: JSON.stringify(manifest, null, 2) };
+
 		for (const topic of data.agentMemories) {
-			memoryFolder.file(`${topic.slug}.md`, `# ${topic.title}\n\n${topic.content}`);
+			yield { name: `memory/${topic.slug}.md`, input: `# ${topic.title}\n\n${topic.content}` };
+		}
+
+		yield { name: 'images/index.json', input: JSON.stringify(imageIndex, null, 2) };
+
+		for (const entry of imageIndex) {
+			const record = await getImageBlob(entry.id);
+			if (record) {
+				yield { name: `images/${entry.filename}`, input: record.blob };
+			}
 		}
 	}
 
-	// Images: fetch each blob individually. Note that JSZip still buffers
-	// everything in memory before generateAsync — a streaming zip library
-	// (fflate, client-zip) would be needed to truly bound memory usage.
-	const imageIndex: ImageManifestEntry[] = [];
-	const imagesFolder = zip.folder('images')!;
-
-	for (const meta of data.imageMeta) {
-		const blobs = await getImageBlob(meta.id);
-		if (!blobs) continue;
-
-		const filename = meta.id + extensionForMime(meta.mimeType);
-		imagesFolder.file(filename, blobs.blob);
-		imageIndex.push({
-			id: meta.id,
-			projectId: meta.projectId,
-			messageId: meta.messageId,
-			source: meta.source,
-			mimeType: meta.mimeType,
-			width: meta.width,
-			height: meta.height,
-			label: meta.label,
-			generationContext: meta.generationContext,
-			createdAt: meta.createdAt,
-			filename
-		});
-	}
-	imagesFolder.file('index.json', JSON.stringify(imageIndex, null, 2));
-
-	return zip.generateAsync({ type: 'blob' });
+	return downloadZip(entries()).blob();
 }
 
 export async function importProject(zipBlob: Blob): Promise<Project> {
