@@ -27,26 +27,6 @@ function getClient(apiKey: string): GoogleGenAI {
 	return clientInstance;
 }
 
-// ── Shared helpers ──
-
-/**
- * Retrieve chat history, falling back to manual construction if the SDK
- * method isn't available.
- */
-function getChatHistory(
-	chat: Chat,
-	fallbackHistory: Content[],
-	userParts: Part[],
-	modelParts: Part[]
-): Content[] {
-	if (chat.getHistory) return chat.getHistory();
-	return [
-		...fallbackHistory,
-		{ role: 'user', parts: userParts },
-		{ role: 'model', parts: modelParts }
-	];
-}
-
 // ── Exported types ──
 
 export interface ParsedTextResponse {
@@ -63,10 +43,8 @@ export interface StreamChunk {
 }
 
 export interface GeminiImageResponse {
-	text: string;
-	imageData: Uint8Array;
+	imageData: string;
 	mimeType: string;
-	history: Content[];
 }
 
 // ── Streaming text/tool messaging ──
@@ -86,16 +64,8 @@ export async function sendMessageStreaming(
 	config?: GenerateContentConfig
 ): Promise<{
 	stream: AsyncGenerator<StreamChunk>;
-	getResult: () => Promise<ParsedTextResponse>;
+	getResult: () => ParsedTextResponse;
 }> {
-	// TODO: remove before shipping
-	const debugParts = userParts.map((p) => {
-		if ('inlineData' in p && p.inlineData) return { inlineData: `[${p.inlineData.mimeType}]` };
-		if ('functionResponse' in p && p.functionResponse) return { functionResponse: p.functionResponse };
-		return p;
-	});
-	console.log(`[gemini] >>> ${modelId} | history: ${history.length} | parts:`, debugParts);
-
 	const client = getClient(apiKey);
 	const chat: Chat = client.chats.create({
 		model: modelId,
@@ -109,29 +79,10 @@ export async function sendMessageStreaming(
 	const allFunctionCalls: FunctionCall[] = [];
 	let consumed = false;
 
-	// Gemini models emit junk text parts at the boundary between thought/
-	// function-call parts and the real response (digits, ",thought", etc.).
-	// We skip text parts that arrive before real content if they contain
-	// no letters. Once a part with actual prose arrives, everything flows
-	// through unfiltered.
-	let hadRealText = false;
-
-	let chunkIndex = 0;
-
 	async function* stream(): AsyncGenerator<StreamChunk> {
 		for await (const chunk of responseStream) {
 			const parts = chunk.candidates?.[0]?.content?.parts ?? [];
 			const out: StreamChunk = {};
-
-			// TODO: remove before shipping
-			const debugChunkParts = parts.map((p) => ({
-				...(p.text !== undefined && { text: p.text.slice(0, 120) + (p.text.length > 120 ? '...' : '') }),
-				...(p.thought && { thought: true }),
-				...(p.thoughtSignature && { sig: true }),
-				...(p.functionCall && { fn: p.functionCall.name, args: p.functionCall.args }),
-				...(('inlineData' in p && p.inlineData) && { img: p.inlineData.mimeType }),
-			}));
-			console.log(`[gemini] chunk ${chunkIndex++}:`, debugChunkParts);
 
 			for (const part of parts) {
 				if (part.functionCall) {
@@ -143,19 +94,8 @@ export async function sendMessageStreaming(
 						out.thoughtDelta = (out.thoughtDelta ?? '') + part.text;
 					}
 				} else if (part.text) {
-					if (!hadRealText && !/[a-zA-Z]/.test(part.text) && part.text.length < 10) {
-						// Short junk token before real content (e.g. ",", "2"); skip it.
-						continue;
-					}
-					let text = part.text;
-					if (!hadRealText) {
-						// First real text part: strip any thought delimiter prefix.
-						text = text.replace(/^[\s,\-\d]*thought\b\s*/i, '');
-						if (!text) continue;
-					}
-					hadRealText = true;
-					out.textDelta = (out.textDelta ?? '') + text;
-					fullText += text;
+					out.textDelta = (out.textDelta ?? '') + part.text;
+					fullText += part.text;
 				}
 			}
 
@@ -166,16 +106,14 @@ export async function sendMessageStreaming(
 		consumed = true;
 	}
 
-	async function getResult(): Promise<ParsedTextResponse> {
+	function getResult(): ParsedTextResponse {
 		if (!consumed) {
 			throw new Error('Stream must be fully consumed before calling getResult()');
 		}
-		// TODO: remove before shipping
-		console.log(`[gemini] <<< text: ${fullText.length} chars | functionCalls: ${allFunctionCalls.map((fc) => fc.name).join(', ') || 'none'}`);
 		return {
 			text: fullText,
 			functionCalls: allFunctionCalls,
-			history: getChatHistory(chat, history, userParts, [{ text: fullText }])
+			history: chat.getHistory(true)
 		};
 	}
 
@@ -192,7 +130,6 @@ export async function generateImage(
 	modelId: string,
 	prompt: string,
 	options: {
-		history?: Content[];
 		inputImages?: Array<{ data: string; mimeType: string }>;
 		aspectRatio?: string;
 	} = {}
@@ -206,7 +143,6 @@ export async function generateImage(
 
 	const chat: Chat = client.chats.create({
 		model: modelId,
-		history: options.history ?? [],
 		config
 	});
 
@@ -225,31 +161,20 @@ export async function generateImage(
 
 	const response = await chat.sendMessage({ message: parts });
 
-	let text = '';
-	let imageData: Uint8Array | null = null;
-	let mimeType = 'image/png';
+	const responseParts = response.candidates?.[0]?.content?.parts ?? [];
 
-	if (response.candidates?.[0]?.content?.parts) {
-		for (const part of response.candidates[0].content.parts) {
-			if (part.text && !part.thought) {
-				text += part.text;
-			} else if (part.inlineData && !imageData) {
-				imageData = part.inlineData.data as unknown as Uint8Array;
-				mimeType = part.inlineData.mimeType ?? 'image/png';
-			}
+	for (const part of responseParts) {
+		if (part.inlineData?.data) {
+			return {
+				imageData: part.inlineData.data,
+				mimeType: part.inlineData.mimeType ?? 'image/png'
+			};
 		}
 	}
 
-	if (!imageData) {
-		throw new Error('Image model did not return an image. Response text: ' + text);
-	}
-
-	const responseParts = response.candidates?.[0]?.content?.parts ?? [];
-
-	return {
-		text,
-		imageData,
-		mimeType,
-		history: getChatHistory(chat, options.history ?? [], parts, responseParts)
-	};
+	const text = responseParts
+		.filter((p) => p.text && !p.thought)
+		.map((p) => p.text)
+		.join('');
+	throw new Error('Image model did not return an image. Response text: ' + text);
 }

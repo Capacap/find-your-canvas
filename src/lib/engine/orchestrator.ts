@@ -11,10 +11,10 @@
  * The engine has no direct database dependencies. All state is provided
  * via TurnContext, and all side effects go through TurnActions.
  */
-import { ThinkingLevel, Type, type Content, type FunctionCall, type FunctionDeclaration, type Part } from '@google/genai';
+import { Type, ThinkingLevel, type Content, type FunctionCall, type FunctionDeclaration, type Part } from '@google/genai';
 import type { Message, MemoryTopic, StoredImage, ImageSource } from '$lib/types/schema';
 import { sendMessageStreaming, generateImage } from './gemini';
-import { blobToBase64, imageDataToBlob } from './utils';
+import { blobToBase64, base64ToBlob } from './utils';
 import {
 	systemTemplate,
 	memoryIndexTemplate,
@@ -189,7 +189,7 @@ function appendImageRefs(text: string, imageIds: string[]): string {
 
 // ── Tool declarations ──
 
-const toolDeclarations: FunctionDeclaration[] = [
+const TOOL_DECLARATIONS: FunctionDeclaration[] = [
 	{
 		name: 'generate_image',
 		description:
@@ -331,7 +331,7 @@ async function handleGenerateImage(
 			aspectRatio,
 			inputImages: inputImages.length > 0 ? inputImages : undefined
 		});
-		const blob = imageDataToBlob(imageResponse.imageData, imageResponse.mimeType);
+		const blob = base64ToBlob(imageResponse.imageData, imageResponse.mimeType);
 		const stored = await actions.storeImage(blob, label, { generationContext: prompt });
 
 		onEvent({ type: 'image_complete', imageId: stored.id, label });
@@ -454,12 +454,34 @@ async function executeToolCall(
 
 // ── Main orchestration loop ──
 
+let turnInProgress = false;
+
 export async function runAgentTurn(
 	ctx: TurnContext,
 	actions: TurnActions,
 	userText: string,
 	onEvent: EventCallback,
 	attachments: UserAttachment[] = []
+): Promise<TurnResult> {
+	if (turnInProgress) {
+		onEvent({ type: 'error', message: 'A turn is already in progress.' });
+		return { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [] };
+	}
+	turnInProgress = true;
+
+	try {
+		return await runAgentTurnInner(ctx, actions, userText, onEvent, attachments);
+	} finally {
+		turnInProgress = false;
+	}
+}
+
+async function runAgentTurnInner(
+	ctx: TurnContext,
+	actions: TurnActions,
+	userText: string,
+	onEvent: EventCallback,
+	attachments: UserAttachment[]
 ): Promise<TurnResult> {
 	if (!ctx.apiKey) {
 		onEvent({ type: 'error', message: 'No API key configured. Add your Gemini API key in settings.' });
@@ -471,7 +493,7 @@ export async function runAgentTurn(
 
 	const config = {
 		systemInstruction: systemPrompt,
-		tools: [{ functionDeclarations: toolDeclarations }],
+		tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
 		thinkingConfig: { includeThoughts: true, thinkingLevel: ThinkingLevel.LOW }
 	};
 
@@ -513,7 +535,7 @@ export async function runAgentTurn(
 				}
 			}
 
-			const result = await getResult();
+			const result = getResult();
 			history = result.history;
 
 			onEvent({ type: 'debug_response', round, text: result.text, functionCalls: debugFunctionCalls });
@@ -551,6 +573,8 @@ export async function runAgentTurn(
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		onEvent({ type: 'error', message: `API error: ${msg}` });
+		onEvent({ type: 'done', assistantText: '', imageIds: [] });
+		return { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [] };
 	}
 
 	const finalAssistantText = appendImageRefs(accumulatedText, generatedImageIds);

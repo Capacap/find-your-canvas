@@ -18,16 +18,13 @@ export function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * Convert base64 or Uint8Array image data to a Blob.
+ * Convert a base64 string to a Blob.
  */
-export function imageDataToBlob(data: Uint8Array | string, mimeType: string): Blob {
-	if (typeof data === 'string') {
-		const binary = atob(data);
-		const bytes = new Uint8Array(binary.length);
-		for (let i = 0; i < binary.length; i++) {
-			bytes[i] = binary.charCodeAt(i);
-		}
-		return new Blob([bytes], { type: mimeType });
+export function base64ToBlob(base64: string, mimeType: string): Blob {
+	const binary = atob(base64);
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) {
+		bytes[i] = binary.charCodeAt(i);
 	}
-	return new Blob([data as BlobPart], { type: mimeType });
+	return new Blob([bytes], { type: mimeType });
 }
