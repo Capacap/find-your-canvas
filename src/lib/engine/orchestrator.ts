@@ -348,7 +348,7 @@ async function handleGenerateImage(
 }
 
 async function handleViewImage(
-	name: string, args: ToolArgs, actions: TurnActions, onEvent: EventCallback
+	name: string, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
 ): Promise<ToolExecResult> {
 	const imageId = args.image_id as string;
 	const reason = args.reason as string | undefined;
@@ -375,7 +375,7 @@ async function handleViewImage(
 }
 
 async function handleReadMemory(
-	name: string, args: ToolArgs, actions: TurnActions, onEvent: EventCallback
+	name: string, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
 ): Promise<ToolExecResult> {
 	const slug = args.topic as string;
 
@@ -401,7 +401,7 @@ async function handleReadMemory(
 }
 
 async function handleUpdateMemory(
-	name: string, args: ToolArgs, actions: TurnActions, onEvent: EventCallback
+	name: string, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
 ): Promise<ToolExecResult> {
 	const slug = args.topic as string;
 	const title = args.title as string;
@@ -425,9 +425,9 @@ type ToolHandler = (
 
 const toolHandlers: Record<string, ToolHandler> = {
 	generate_image: handleGenerateImage,
-	view_image: (name, args, _ctx, actions, onEvent) => handleViewImage(name, args, actions, onEvent),
-	read_memory: (name, args, _ctx, actions, onEvent) => handleReadMemory(name, args, actions, onEvent),
-	update_memory: (name, args, _ctx, actions, onEvent) => handleUpdateMemory(name, args, actions, onEvent),
+	view_image: handleViewImage,
+	read_memory: handleReadMemory,
+	update_memory: handleUpdateMemory,
 };
 
 async function executeToolCall(

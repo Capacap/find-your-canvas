@@ -39,7 +39,7 @@
 	let showSettings = $state(false);
 	let apiKeyInput = $state('');
 	let newProjectName = $state('');
-	let streamedEvents = $state<OrchestratorEvent[]>([]);
+	let debugEvents = $state<OrchestratorEvent[]>([]);
 	let streamingText = $state('');
 	let streamingThought = $state('');
 	let showMemoryPanel = $state(false);
@@ -51,6 +51,7 @@
 
 	// Image URL resolution for display
 	let resolvedImageUrls = $state<Record<string, string>>({});
+	let lightboxImage = $derived(app.projectImages.find((img) => img.id === lightboxImageId));
 
 	onMount(async () => {
 		await loadSettings();
@@ -93,11 +94,17 @@
 
 	async function handleSelectProject(id: string) {
 		revokeImageUrls();
+		resolvedImageUrls = {};
 		await selectProject(id);
 	}
 
 	async function handleNewConversation(title = 'New conversation') {
 		await createNewConversation(title);
+	}
+
+	async function handleSelectConversation(id: string) {
+		resolvedImageUrls = {};
+		await selectConversation(id);
 	}
 
 	async function resolveImageId(imageId: string) {
@@ -129,7 +136,7 @@
 		}
 		userInput = '';
 		isRunning = true;
-		streamedEvents = [];
+		debugEvents = [];
 		streamingText = '';
 		streamingThought = '';
 		statusText = 'Thinking...';
@@ -143,9 +150,9 @@
 			textModel: TEXT_MODEL,
 			imageModel: IMAGE_MODEL,
 			projectName: app.currentProject.name,
-			agentMemories: app.agentMemories,
-			projectImages: app.projectImages,
-			apiHistory: app.currentConversation?.apiHistory ?? []
+			agentMemories: $state.snapshot(app.agentMemories),
+			projectImages: $state.snapshot(app.projectImages),
+			apiHistory: $state.snapshot(app.currentConversation?.apiHistory ?? [])
 		};
 
 		const actions: TurnActions = {
@@ -159,7 +166,9 @@
 		};
 
 		const onEvent = (event: OrchestratorEvent) => {
-			streamedEvents = [...streamedEvents, event];
+			if (event.type.startsWith('debug_')) {
+				debugEvents = [...debugEvents, event];
+			}
 
 			if (event.type === 'text_delta') {
 				streamingText += event.text;
@@ -358,7 +367,7 @@
 		<h1>Banana Orchestra</h1>
 		<nav>
 			{#if app.currentProject}
-				<button onclick={() => deselectProject()}>
+				<button onclick={() => { resolvedImageUrls = {}; deselectProject(); }}>
 					&larr; Projects
 				</button>
 				<span class="project-name">{app.currentProject.name}</span>
@@ -450,7 +459,7 @@
 						<button
 							class="convo-item"
 							class:active={app.currentConversation?.id === convo.id}
-							onclick={() => selectConversation(convo.id)}
+							onclick={() => handleSelectConversation(convo.id)}
 						>
 							{convo.title}
 						</button>
@@ -578,10 +587,10 @@
 						<div class="status error">{errorText}</div>
 					{/if}
 
-					{#if showDebug && streamedEvents.some((e) => e.type.startsWith('debug_'))}
+					{#if showDebug && debugEvents.length > 0}
 						<details class="debug-log" open>
 							<summary>Debug Log</summary>
-							{#each streamedEvents as event}
+							{#each debugEvents as event}
 								{#if event.type === 'debug_system_prompt'}
 									<div class="debug-entry debug-system">
 										<div class="debug-label">System Prompt</div>
@@ -674,16 +683,14 @@
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div class="lightbox-content" onclick={(e) => e.stopPropagation()}>
 			<img src={resolvedImageUrls[lightboxImageId]} alt="Full size preview" />
-			{#each app.projectImages as img}
-				{#if img.id === lightboxImageId}
-					<div class="lightbox-info">
-						<span class="lightbox-label">{img.label}</span>
-						{#if img.generationContext}
-							<span class="lightbox-context">{img.generationContext}</span>
-						{/if}
-					</div>
-				{/if}
-			{/each}
+			{#if lightboxImage}
+				<div class="lightbox-info">
+					<span class="lightbox-label">{lightboxImage.label}</span>
+					{#if lightboxImage.generationContext}
+						<span class="lightbox-context">{lightboxImage.generationContext}</span>
+					{/if}
+				</div>
+			{/if}
 		</div>
 	</div>
 {/if}
