@@ -15,7 +15,9 @@ let projectImages = $state<ImageMeta[]>([]);
 let agentMemories = $state<AgentMemory[]>([]);
 let settings = $state<Settings | null>(null);
 
-// Image URL cache: imageId -> objectURL
+// Image URL cache with LRU eviction. Map iteration order tracks insertion,
+// and we re-insert on access to promote recently used entries.
+const IMAGE_URL_CACHE_MAX = 50;
 const imageUrlCache = new Map<string, string>();
 
 export function getAppState() {
@@ -45,16 +47,17 @@ export async function loadProjects(): Promise<void> {
 }
 
 export async function selectProject(id: string): Promise<void> {
+	revokeImageUrls();
 	currentProject = (await ops.getProject(id)) ?? null;
 	currentConversation = null;
 	messages = [];
+	conversations = [];
+	projectImages = [];
+	agentMemories = [];
 	if (currentProject) {
 		conversations = await ops.listConversations(id);
 		projectImages = await ops.listProjectImages(id);
 		agentMemories = await ops.listAgentMemories(id);
-	} else {
-		projectImages = [];
-		agentMemories = [];
 	}
 }
 
@@ -153,12 +156,25 @@ export async function refreshProjectImages(): Promise<void> {
  */
 export async function getImageUrl(imageId: string): Promise<string | null> {
 	const cached = imageUrlCache.get(imageId);
-	if (cached) return cached;
+	if (cached) {
+		// Promote to most-recently-used by re-inserting.
+		imageUrlCache.delete(imageId);
+		imageUrlCache.set(imageId, cached);
+		return cached;
+	}
 
 	const blobs = await ops.getImageBlob(imageId);
 	if (!blobs) return null;
 
 	const url = ops.blobToObjectUrl(blobs.blob);
+
+	// Evict oldest entries if at capacity.
+	while (imageUrlCache.size >= IMAGE_URL_CACHE_MAX) {
+		const oldest = imageUrlCache.keys().next().value!;
+		URL.revokeObjectURL(imageUrlCache.get(oldest)!);
+		imageUrlCache.delete(oldest);
+	}
+
 	imageUrlCache.set(imageId, url);
 	return url;
 }

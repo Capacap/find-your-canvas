@@ -7,11 +7,20 @@ const MAX_DIMENSION = 512;
 const THUMBNAIL_QUALITY = 0.8;
 const THUMBNAIL_TYPE = 'image/jpeg';
 
+export interface ThumbnailResult {
+	thumbnail: Blob;
+	/** Original image width in pixels. */
+	width: number;
+	/** Original image height in pixels. */
+	height: number;
+}
+
 /**
  * Create a thumbnail blob from a full-size image blob.
- * Returns a JPEG blob scaled to fit within MAX_DIMENSION px.
+ * Returns a JPEG blob scaled to fit within MAX_DIMENSION px,
+ * along with the original image dimensions.
  */
-export async function createThumbnail(source: Blob): Promise<Blob> {
+export async function createThumbnail(source: Blob): Promise<ThumbnailResult> {
 	const bitmap = await createImageBitmap(source);
 	const { width, height } = bitmap;
 
@@ -30,7 +39,8 @@ export async function createThumbnail(source: Blob): Promise<Blob> {
 		const ctx = canvas.getContext('2d')!;
 		ctx.drawImage(bitmap, 0, 0, targetW, targetH);
 		bitmap.close();
-		return canvas.convertToBlob({ type: THUMBNAIL_TYPE, quality: THUMBNAIL_QUALITY });
+		const thumbnail = await canvas.convertToBlob({ type: THUMBNAIL_TYPE, quality: THUMBNAIL_QUALITY });
+		return { thumbnail, width, height };
 	}
 
 	// Fallback: DOM canvas.
@@ -43,7 +53,7 @@ export async function createThumbnail(source: Blob): Promise<Blob> {
 
 	return new Promise((resolve, reject) => {
 		canvas.toBlob(
-			(blob) => (blob ? resolve(blob) : reject(new Error('Canvas toBlob failed'))),
+			(blob) => (blob ? resolve({ thumbnail: blob, width, height }) : reject(new Error('Canvas toBlob failed'))),
 			THUMBNAIL_TYPE,
 			THUMBNAIL_QUALITY
 		);

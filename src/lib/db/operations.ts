@@ -117,40 +117,37 @@ export async function upsertAgentMemory(
 	summary: string,
 	content: string
 ): Promise<void> {
-	const existing = await getAgentMemoryBySlug(projectId, slug);
 	const timestamp = now();
 
-	if (!content.trim()) {
-		// Empty content = delete.
-		if (existing) {
-			await db.agentMemories.delete(existing.id);
+	await db.transaction('rw', [db.agentMemories, db.projects], async () => {
+		const existing = await db.agentMemories.where('[projectId+slug]').equals([projectId, slug]).first();
+
+		if (!content.trim()) {
+			if (existing) {
+				await db.agentMemories.delete(existing.id);
+			}
+		} else if (existing) {
+			await db.agentMemories.update(existing.id, {
+				title,
+				summary,
+				content,
+				updatedAt: timestamp
+			});
+		} else {
+			await db.agentMemories.add({
+				id: generateId(),
+				projectId,
+				slug,
+				title,
+				summary,
+				content,
+				createdAt: timestamp,
+				updatedAt: timestamp
+			});
 		}
+
 		await db.projects.update(projectId, { updatedAt: timestamp });
-		return;
-	}
-
-	if (existing) {
-		await db.agentMemories.update(existing.id, {
-			title,
-			summary,
-			content,
-			updatedAt: timestamp
-		});
-	} else {
-		const entry: AgentMemory = {
-			id: generateId(),
-			projectId,
-			slug,
-			title,
-			summary,
-			content,
-			createdAt: timestamp,
-			updatedAt: timestamp
-		};
-		await db.agentMemories.add(entry);
-	}
-
-	await db.projects.update(projectId, { updatedAt: timestamp });
+	});
 }
 
 // ── Conversations ──
@@ -164,8 +161,10 @@ export async function createConversation(projectId: string, title: string): Prom
 		createdAt: timestamp,
 		updatedAt: timestamp
 	};
-	await db.conversations.add(conversation);
-	await db.projects.update(projectId, { updatedAt: timestamp });
+	await db.transaction('rw', [db.conversations, db.projects], async () => {
+		await db.conversations.add(conversation);
+		await db.projects.update(projectId, { updatedAt: timestamp });
+	});
 	return conversation;
 }
 
@@ -185,15 +184,20 @@ export async function updateConversation(
 }
 
 export async function deleteConversation(id: string): Promise<void> {
-	await db.transaction('rw', [db.conversations, db.messages], async () => {
+	await db.transaction('rw', [db.conversations, db.messages, db.projects], async () => {
+		const convo = await db.conversations.get(id);
 		await db.messages.where('conversationId').equals(id).delete();
 		await db.conversations.delete(id);
+		if (convo) {
+			await db.projects.update(convo.projectId, { updatedAt: now() });
+		}
 	});
 }
 
 // ── Messages ──
 
 export async function addMessage(
+	projectId: string,
 	conversationId: string,
 	role: Message['role'],
 	text: string,
@@ -208,14 +212,11 @@ export async function addMessage(
 		imageIds,
 		createdAt: timestamp
 	};
-	await db.messages.add(message);
-
-	// Touch the conversation's updatedAt.
-	const convo = await db.conversations.get(conversationId);
-	if (convo) {
+	await db.transaction('rw', [db.messages, db.conversations, db.projects], async () => {
+		await db.messages.add(message);
 		await db.conversations.update(conversationId, { updatedAt: timestamp });
-		await db.projects.update(convo.projectId, { updatedAt: timestamp });
-	}
+		await db.projects.update(projectId, { updatedAt: timestamp });
+	});
 
 	return message;
 }
@@ -237,13 +238,11 @@ export async function storeImage(
 		source?: ImageSource;
 		messageId?: string;
 		mimeType?: string;
-		width?: number;
-		height?: number;
 		generationContext?: string;
 	} = {}
 ): Promise<ImageMeta> {
 	const id = generateId();
-	const thumbnail = await createThumbnail(blob);
+	const { thumbnail, width, height } = await createThumbnail(blob);
 
 	const meta: ImageMeta = {
 		id,
@@ -251,13 +250,14 @@ export async function storeImage(
 		source: options.source ?? 'generated',
 		messageId: options.messageId,
 		mimeType: options.mimeType ?? blob.type ?? 'image/png',
-		width: options.width,
-		height: options.height,
+		width,
+		height,
 		label,
 		generationContext: options.generationContext,
+		thumbnail,
 		createdAt: now()
 	};
-	const blobRecord: ImageBlob = { id, blob, thumbnail };
+	const blobRecord: ImageBlob = { id, blob };
 
 	await db.transaction('rw', [db.imageMeta, db.imageBlobs], async () => {
 		await db.imageMeta.add(meta);
@@ -310,10 +310,10 @@ export function blobToObjectUrl(blob: Blob): string {
  * Get the thumbnail for an image as a base64 string.
  */
 export async function getImageThumbnailBase64(imageId: string): Promise<{ base64: string; mimeType: string } | undefined> {
-	const blobs = await db.imageBlobs.get(imageId);
-	if (!blobs) return undefined;
+	const meta = await db.imageMeta.get(imageId);
+	if (!meta) return undefined;
 
-	const base64 = await blobToBase64(blobs.thumbnail);
+	const base64 = await blobToBase64(meta.thumbnail);
 	return { base64, mimeType: 'image/jpeg' };
 }
 
@@ -324,7 +324,6 @@ export interface ProjectExportData {
 	conversations: Conversation[];
 	messages: Message[];
 	imageMeta: ImageMeta[];
-	imageBlobs: ImageBlob[];
 	agentMemories: AgentMemory[];
 }
 
@@ -344,24 +343,16 @@ export async function getProjectExportData(projectId: string): Promise<ProjectEx
 			: [];
 
 	const imageMeta = await db.imageMeta.where('projectId').equals(projectId).toArray();
-	const imageIds = imageMeta.map((m) => m.id);
-	const imageBlobs = imageIds.length > 0
-		? await db.imageBlobs.where('id').anyOf(imageIds).toArray()
-		: [];
-
 	const agentMemories = await db.agentMemories.where('projectId').equals(projectId).toArray();
 
-	return { project, conversations, messages, imageMeta, imageBlobs, agentMemories };
+	return { project, conversations, messages, imageMeta, agentMemories };
 }
 
-export async function importProjectData(data: {
-	project: Project;
-	conversations: Conversation[];
-	messages: Message[];
-	imageMeta: ImageMeta[];
+export interface ProjectImportData extends ProjectExportData {
 	imageBlobs: ImageBlob[];
-	agentMemories: AgentMemory[];
-}): Promise<void> {
+}
+
+export async function importProjectData(data: ProjectImportData): Promise<void> {
 	await db.transaction(
 		'rw',
 		[db.projects, db.conversations, db.messages, db.imageMeta, db.imageBlobs, db.agentMemories],

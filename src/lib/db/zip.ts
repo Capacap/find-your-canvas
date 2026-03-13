@@ -12,8 +12,8 @@ import { createThumbnail } from './thumbnail';
 import {
 	getProject,
 	getProjectExportData,
-	importProjectData,
-	type ProjectExportData
+	getImageBlob,
+	importProjectData
 } from './operations';
 import type {
 	Project,
@@ -60,9 +60,6 @@ function extensionForMime(mime: string): string {
 export async function exportProject(projectId: string): Promise<Blob> {
 	const data = await getProjectExportData(projectId);
 
-	// Build a lookup from image ID to blob for the export.
-	const blobMap = new Map(data.imageBlobs.map((b) => [b.id, b]));
-
 	const zip = new JSZip();
 
 	const manifest: ExportManifest = {
@@ -83,12 +80,12 @@ export async function exportProject(projectId: string): Promise<Blob> {
 		}
 	}
 
-	// Images.
+	// Images: fetch each blob individually to avoid loading all into memory.
 	const imageIndex: ImageManifestEntry[] = [];
 	const imagesFolder = zip.folder('images')!;
 
 	for (const meta of data.imageMeta) {
-		const blobs = blobMap.get(meta.id);
+		const blobs = await getImageBlob(meta.id);
 		if (!blobs) continue;
 
 		const filename = meta.id + extensionForMime(meta.mimeType);
@@ -130,29 +127,39 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
 	const imageMeta: ImageMeta[] = [];
 	const imageBlobs: ImageBlob[] = [];
 
-	for (const entry of imageEntries) {
-		const file = zip.file('images/' + entry.filename);
-		if (!file) continue;
-		const imageBlob = new Blob([await file.async('blob')], { type: entry.mimeType });
-		const thumbnail = await createThumbnail(imageBlob);
+	// Process images with bounded concurrency to avoid blocking the main thread.
+	const CONCURRENCY = 4;
+	for (let i = 0; i < imageEntries.length; i += CONCURRENCY) {
+		const batch = imageEntries.slice(i, i + CONCURRENCY);
+		const results = await Promise.all(batch.map(async (entry) => {
+			const file = zip.file('images/' + entry.filename);
+			if (!file) return null;
+			const imageBlob = new Blob([await file.async('blob')], { type: entry.mimeType });
+			const { thumbnail } = await createThumbnail(imageBlob);
+			return { entry, imageBlob, thumbnail };
+		}));
 
-		imageMeta.push({
-			id: entry.id,
-			projectId: entry.projectId,
-			messageId: entry.messageId,
-			source: entry.source ?? 'generated',
-			mimeType: entry.mimeType,
-			width: entry.width,
-			height: entry.height,
-			label: entry.label,
-			generationContext: entry.generationContext,
-			createdAt: entry.createdAt
-		});
-		imageBlobs.push({
-			id: entry.id,
-			blob: imageBlob,
-			thumbnail
-		});
+		for (const result of results) {
+			if (!result) continue;
+			const { entry, imageBlob, thumbnail } = result;
+			imageMeta.push({
+				id: entry.id,
+				projectId: entry.projectId,
+				messageId: entry.messageId,
+				source: entry.source ?? 'generated',
+				mimeType: entry.mimeType,
+				width: entry.width,
+				height: entry.height,
+				label: entry.label,
+				generationContext: entry.generationContext,
+				thumbnail,
+				createdAt: entry.createdAt
+			});
+			imageBlobs.push({
+				id: entry.id,
+				blob: imageBlob
+			});
+		}
 	}
 
 	await importProjectData({

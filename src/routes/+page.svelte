@@ -192,9 +192,9 @@
 			const result = await runAgentTurn(ctx, actions, text, onEvent, attachments);
 
 			// Persist messages from the turn result.
-			await ops.addMessage(conversationId, 'user', result.userText, result.userImageIds);
+			await ops.addMessage(projectId, conversationId, 'user', result.userText, result.userImageIds);
 			if (result.assistantText) {
-				await ops.addMessage(conversationId, 'assistant', result.assistantText, result.assistantImageIds);
+				await ops.addMessage(projectId, conversationId, 'assistant', result.assistantText, result.assistantImageIds);
 			}
 
 			await refreshMessages();
