@@ -5,7 +5,7 @@
 import { db } from './database';
 import { DEFAULT_SETTINGS } from '$lib/types/schema';
 import { createThumbnail } from './thumbnail';
-import { blobToBase64 } from '$lib/engine/utils';
+import { blobToBase64 } from '$lib/utils';
 import type {
 	Project,
 	Conversation,
@@ -367,4 +367,12 @@ export async function importProjectData(data: ProjectImportData): Promise<void> 
 			}
 		}
 	);
+}
+
+/** Write a batch of images during import. Separate from importProjectData to allow incremental flushing. */
+export async function importImageBatch(meta: ImageMeta[], blobs: ImageBlob[]): Promise<void> {
+	await db.transaction('rw', [db.imageMeta, db.imageBlobs], async () => {
+		await db.imageMeta.bulkPut(meta);
+		await db.imageBlobs.bulkPut(blobs);
+	});
 }

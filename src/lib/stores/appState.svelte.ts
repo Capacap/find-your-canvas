@@ -19,6 +19,7 @@ let settings = $state<Settings | null>(null);
 // and we re-insert on access to promote recently used entries.
 const IMAGE_URL_CACHE_MAX = 50;
 const imageUrlCache = new Map<string, string>();
+const imageUrlInflight = new Map<string, Promise<string | null>>();
 
 export function getAppState() {
 	return {
@@ -163,20 +164,33 @@ export async function getImageUrl(imageId: string): Promise<string | null> {
 		return cached;
 	}
 
-	const blobs = await ops.getImageBlob(imageId);
-	if (!blobs) return null;
+	// Deduplicate concurrent fetches for the same image.
+	const inflight = imageUrlInflight.get(imageId);
+	if (inflight) return inflight;
 
-	const url = ops.blobToObjectUrl(blobs.blob);
+	const promise = (async () => {
+		const blobs = await ops.getImageBlob(imageId);
+		if (!blobs) return null;
 
-	// Evict oldest entries if at capacity.
-	while (imageUrlCache.size >= IMAGE_URL_CACHE_MAX) {
-		const oldest = imageUrlCache.keys().next().value!;
-		URL.revokeObjectURL(imageUrlCache.get(oldest)!);
-		imageUrlCache.delete(oldest);
+		const url = ops.blobToObjectUrl(blobs.blob);
+
+		// Evict oldest entries if at capacity.
+		while (imageUrlCache.size >= IMAGE_URL_CACHE_MAX) {
+			const oldest = imageUrlCache.keys().next().value!;
+			URL.revokeObjectURL(imageUrlCache.get(oldest)!);
+			imageUrlCache.delete(oldest);
+		}
+
+		imageUrlCache.set(imageId, url);
+		return url;
+	})();
+
+	imageUrlInflight.set(imageId, promise);
+	try {
+		return await promise;
+	} finally {
+		imageUrlInflight.delete(imageId);
 	}
-
-	imageUrlCache.set(imageId, url);
-	return url;
 }
 
 export async function removeImage(imageId: string): Promise<void> {

@@ -13,7 +13,8 @@ import {
 	getProject,
 	getProjectExportData,
 	getImageBlob,
-	importProjectData
+	importProjectData,
+	importImageBatch
 } from './operations';
 import type {
 	Project,
@@ -80,7 +81,9 @@ export async function exportProject(projectId: string): Promise<Blob> {
 		}
 	}
 
-	// Images: fetch each blob individually to avoid loading all into memory.
+	// Images: fetch each blob individually. Note that JSZip still buffers
+	// everything in memory before generateAsync — a streaming zip library
+	// (fflate, client-zip) would be needed to truly bound memory usage.
 	const imageIndex: ImageManifestEntry[] = [];
 	const imagesFolder = zip.folder('images')!;
 
@@ -116,7 +119,6 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
 	if (!manifestFile) throw new Error('Invalid project zip: missing project.json');
 
 	const manifest: ExportManifest = JSON.parse(await manifestFile.async('text'));
-	if (manifest.version !== 1) throw new Error(`Unsupported export version: ${manifest.version}`);
 
 	// Load image index and blobs.
 	const imageIndexFile = zip.file('images/index.json');
@@ -124,10 +126,17 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
 		? JSON.parse(await imageIndexFile.async('text'))
 		: [];
 
-	const imageMeta: ImageMeta[] = [];
-	const imageBlobs: ImageBlob[] = [];
+	// Write project, conversations, messages, and memories first (no images).
+	await importProjectData({
+		project: manifest.project,
+		conversations: manifest.conversations,
+		messages: manifest.messages,
+		imageMeta: [],
+		imageBlobs: [],
+		agentMemories: manifest.agentMemories
+	});
 
-	// Process images with bounded concurrency to avoid blocking the main thread.
+	// Process and flush images in batches to avoid holding all blobs in memory.
 	const CONCURRENCY = 4;
 	for (let i = 0; i < imageEntries.length; i += CONCURRENCY) {
 		const batch = imageEntries.slice(i, i + CONCURRENCY);
@@ -139,10 +148,13 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
 			return { entry, imageBlob, thumbnail };
 		}));
 
+		const batchMeta: ImageMeta[] = [];
+		const batchBlobs: ImageBlob[] = [];
+
 		for (const result of results) {
 			if (!result) continue;
 			const { entry, imageBlob, thumbnail } = result;
-			imageMeta.push({
+			batchMeta.push({
 				id: entry.id,
 				projectId: entry.projectId,
 				messageId: entry.messageId,
@@ -155,21 +167,16 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
 				thumbnail,
 				createdAt: entry.createdAt
 			});
-			imageBlobs.push({
+			batchBlobs.push({
 				id: entry.id,
 				blob: imageBlob
 			});
 		}
-	}
 
-	await importProjectData({
-		project: manifest.project,
-		conversations: manifest.conversations,
-		messages: manifest.messages,
-		imageMeta,
-		imageBlobs,
-		agentMemories: manifest.agentMemories
-	});
+		if (batchMeta.length > 0) {
+			await importImageBatch(batchMeta, batchBlobs);
+		}
+	}
 
 	return manifest.project;
 }

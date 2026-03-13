@@ -1,5 +1,5 @@
 /**
- * Binary/blob conversion utilities used across the engine.
+ * Binary/blob conversion utilities shared across db and engine layers.
  */
 
 /**
@@ -19,12 +19,9 @@ export function blobToBase64(blob: Blob): Promise<string> {
 
 /**
  * Convert a base64 string to a Blob.
+ * Uses fetch() to avoid the 3x memory overhead of atob + typed array.
  */
-export function base64ToBlob(base64: string, mimeType: string): Blob {
-	const binary = atob(base64);
-	const bytes = new Uint8Array(binary.length);
-	for (let i = 0; i < binary.length; i++) {
-		bytes[i] = binary.charCodeAt(i);
-	}
-	return new Blob([bytes], { type: mimeType });
+export async function base64ToBlob(base64: string, mimeType: string): Promise<Blob> {
+	const res = await fetch(`data:${mimeType};base64,${base64}`);
+	return res.blob();
 }

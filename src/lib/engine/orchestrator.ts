@@ -14,7 +14,7 @@
 import { Type, ThinkingLevel, type Content, type FunctionCall, type FunctionDeclaration, type Part } from '@google/genai';
 import type { Message, AgentMemory, ImageMeta, ImageBlob, ImageSource } from '$lib/types/schema';
 import { sendMessageStreaming, generateImage } from './gemini';
-import { blobToBase64, base64ToBlob } from './utils';
+import { blobToBase64, base64ToBlob } from '$lib/utils';
 import {
 	systemTemplate,
 	memoryIndexTemplate,
@@ -167,17 +167,19 @@ async function processAttachments(
 	attachments: UserAttachment[],
 	actions: TurnActions
 ): Promise<{ ids: string[]; parts: Part[] }> {
-	const ids: string[] = [];
-	const parts: Part[] = [];
-	for (const attachment of attachments) {
-		const stored = await actions.storeImage(attachment.blob, attachment.label, { source: 'user' });
-		ids.push(stored.id);
-		const base64 = await blobToBase64(attachment.blob);
-		parts.push({
-			inlineData: { data: base64, mimeType: attachment.blob.type || 'image/png' }
-		});
-	}
-	return { ids, parts };
+	const results = await Promise.all(
+		attachments.map(async (attachment) => {
+			const [stored, base64] = await Promise.all([
+				actions.storeImage(attachment.blob, attachment.label, { source: 'user' }),
+				blobToBase64(attachment.blob)
+			]);
+			return {
+				id: stored.id,
+				part: { inlineData: { data: base64, mimeType: attachment.blob.type || 'image/png' } } as Part
+			};
+		})
+	);
+	return { ids: results.map((r) => r.id), parts: results.map((r) => r.part) };
 }
 
 /** Append image references like [image:id] to text, if any. */
@@ -318,20 +320,20 @@ async function handleGenerateImage(
 	onEvent({ type: 'image_generating', label });
 
 	try {
-		const inputImages: Array<{ data: string; mimeType: string }> = [];
-		for (const refId of refIds) {
-			const img = await actions.getImage(refId);
-			if (img) {
+		const inputImages = (await Promise.all(
+			refIds.map(async (refId) => {
+				const img = await actions.getImage(refId);
+				if (!img) return null;
 				const data = await blobToBase64(img.blob);
-				inputImages.push({ data, mimeType: img.mimeType });
-			}
-		}
+				return { data, mimeType: img.mimeType };
+			})
+		)).filter((img): img is { data: string; mimeType: string } => img !== null);
 
 		const imageResponse = await generateImage(ctx.apiKey, ctx.imageModel, prompt, {
 			aspectRatio,
 			inputImages: inputImages.length > 0 ? inputImages : undefined
 		});
-		const blob = base64ToBlob(imageResponse.imageData, imageResponse.mimeType);
+		const blob = await base64ToBlob(imageResponse.imageData, imageResponse.mimeType);
 		const stored = await actions.storeImage(blob, label, { generationContext: prompt });
 
 		onEvent({ type: 'image_complete', imageId: stored.id, label });
