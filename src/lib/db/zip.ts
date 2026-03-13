@@ -71,23 +71,9 @@ export async function exportProject(projectId: string): Promise<Blob> {
 		agentMemories: data.agentMemories
 	};
 
-	// Build the image index from metadata (no blobs needed).
-	const imageIndex: ImageManifestEntry[] = data.imageMeta.map((meta) => ({
-		id: meta.id,
-		projectId: meta.projectId,
-		messageId: meta.messageId,
-		source: meta.source,
-		mimeType: meta.mimeType,
-		width: meta.width,
-		height: meta.height,
-		label: meta.label,
-		generationContext: meta.generationContext,
-		createdAt: meta.createdAt,
-		filename: meta.id + extensionForMime(meta.mimeType)
-	}));
-
 	// Yield zip entries one at a time via async generator so only one
 	// image blob is in memory at a time during zip construction.
+	// The image index is yielded last, built from entries that actually had blobs.
 	async function* entries() {
 		yield { name: 'project.json', input: JSON.stringify(manifest, null, 2) };
 
@@ -95,14 +81,29 @@ export async function exportProject(projectId: string): Promise<Blob> {
 			yield { name: `memory/${topic.slug}.md`, input: `# ${topic.title}\n\n${topic.content}` };
 		}
 
-		yield { name: 'images/index.json', input: JSON.stringify(imageIndex, null, 2) };
+		const imageIndex: ImageManifestEntry[] = [];
+		for (const meta of data.imageMeta) {
+			const record = await getImageBlob(meta.id);
+			if (!record) continue;
 
-		for (const entry of imageIndex) {
-			const record = await getImageBlob(entry.id);
-			if (record) {
-				yield { name: `images/${entry.filename}`, input: record.blob };
-			}
+			const filename = meta.id + extensionForMime(meta.mimeType);
+			yield { name: `images/${filename}`, input: record.blob };
+			imageIndex.push({
+				id: meta.id,
+				projectId: meta.projectId,
+				messageId: meta.messageId,
+				source: meta.source,
+				mimeType: meta.mimeType,
+				width: meta.width,
+				height: meta.height,
+				label: meta.label,
+				generationContext: meta.generationContext,
+				createdAt: meta.createdAt,
+				filename
+			});
 		}
+
+		yield { name: 'images/index.json', input: JSON.stringify(imageIndex, null, 2) };
 	}
 
 	return downloadZip(entries()).blob();

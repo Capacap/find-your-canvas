@@ -184,9 +184,19 @@ export async function updateConversation(
 }
 
 export async function deleteConversation(id: string): Promise<void> {
-	await db.transaction('rw', [db.conversations, db.messages, db.projects], async () => {
+	await db.transaction('rw', [db.conversations, db.messages, db.imageMeta, db.projects], async () => {
 		const convo = await db.conversations.get(id);
+		const messageIds = await db.messages.where('conversationId').equals(id).primaryKeys();
 		await db.messages.where('conversationId').equals(id).delete();
+
+		// Clear dangling messageId references on images (images stay, they're project-scoped).
+		if (messageIds.length > 0) {
+			const orphanedImages = await db.imageMeta.where('messageId').anyOf(messageIds).toArray();
+			for (const img of orphanedImages) {
+				await db.imageMeta.update(img.id, { messageId: undefined });
+			}
+		}
+
 		await db.conversations.delete(id);
 		if (convo) {
 			await db.projects.update(convo.projectId, { updatedAt: now() });
@@ -259,9 +269,10 @@ export async function storeImage(
 	};
 	const blobRecord: ImageBlob = { id, blob };
 
-	await db.transaction('rw', [db.imageMeta, db.imageBlobs], async () => {
+	await db.transaction('rw', [db.imageMeta, db.imageBlobs, db.projects], async () => {
 		await db.imageMeta.add(meta);
 		await db.imageBlobs.add(blobRecord);
+		await db.projects.update(projectId, { updatedAt: meta.createdAt });
 	});
 
 	return meta;
