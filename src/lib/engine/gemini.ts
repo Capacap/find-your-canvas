@@ -215,8 +215,8 @@ export async function sendMessageStreaming(
 						out.thoughtDelta = (out.thoughtDelta ?? '') + part.text;
 					}
 				} else if (part.text) {
-					if (!hadRealText && !/[a-zA-Z]/.test(part.text)) {
-						// Junk token before real content; skip it.
+					if (!hadRealText && !/[a-zA-Z]/.test(part.text) && part.text.length < 10) {
+						// Short junk token before real content (e.g. ",", "2"); skip it.
 						continue;
 					}
 					let text = part.text;

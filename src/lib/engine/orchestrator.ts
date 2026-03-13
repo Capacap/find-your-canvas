@@ -21,6 +21,8 @@ import {
 	interpolate
 } from './prompts';
 
+// ── Exported types ──
+
 /** What the orchestrator emits to the UI as it works. */
 export type OrchestratorEvent =
 	| { type: 'text_delta'; text: string }
@@ -69,32 +71,56 @@ export interface TurnResult {
 	assistantImageIds: string[];
 }
 
+export interface UserAttachment {
+	blob: Blob;
+	label: string;
+}
+
+// ── Constants ──
+
 /** Maximum tool-call rounds before we force a stop. */
 const MAX_TOOL_ROUNDS = 5;
 
 // ── System prompt construction ──
 
-/** Threshold below which all topic content is inlined instead of just the index. */
-const INLINE_THRESHOLD = 4000;
-
 function buildMemorySection(topics: MemoryTopic[]): string {
 	if (topics.length === 0) return memoryEmptyTemplate;
 
-	const totalContentLength = topics.reduce((sum, t) => sum + t.content.length, 0);
-
-	if (totalContentLength <= INLINE_THRESHOLD) {
-		// Small project: inline everything so the agent doesn't need read_memory.
-		const sections = topics.map((t) =>
-			`### ${t.title} (\`${t.slug}\`)\n${t.content}`
-		);
-		return '## Project Memory\n\n' + sections.join('\n\n');
-	}
-
-	// Larger project: show index only, agent uses read_memory for full content.
 	const rows = topics.map((t) =>
 		`| \`${t.slug}\` | ${t.title} | ${t.summary} |`
 	).join('\n');
 	return interpolate(memoryIndexTemplate, { rows });
+}
+
+function buildImageIndex(images: StoredImage[]): string {
+	if (images.length === 0) return '';
+
+	const userImages = images.filter((img) => img.source === 'user');
+	const generatedImages = images.filter((img) => img.source !== 'user');
+	const lines: string[] = [];
+
+	if (userImages.length > 0) {
+		lines.push('## Reference Images (uploaded by user)');
+		lines.push('Use view_image to examine reference material the user has provided.', '');
+		for (const img of userImages) {
+			lines.push(`- **${img.label}** (id: ${img.id})`);
+		}
+		lines.push('');
+	}
+
+	if (generatedImages.length > 0) {
+		lines.push('## Generated Images');
+		lines.push('Use view_image to review previous generations.', '');
+		for (const img of generatedImages) {
+			const genCtx = img.generationContext;
+			const desc = genCtx
+				? ` — ${genCtx.slice(0, 120)}${genCtx.length > 120 ? '...' : ''}`
+				: '';
+			lines.push(`- **${img.label}** (id: ${img.id})${desc}`);
+		}
+	}
+
+	return lines.join('\n');
 }
 
 function buildSystemPrompt(
@@ -102,41 +128,10 @@ function buildSystemPrompt(
 	memoryTopics: MemoryTopic[],
 	projectImages: StoredImage[]
 ): string {
-	const memorySection = buildMemorySection(memoryTopics);
-
-	let imageIndexSection = '';
-	if (projectImages.length > 0) {
-		const userImages = projectImages.filter((img) => img.source === 'user');
-		const generatedImages = projectImages.filter((img) => img.source !== 'user');
-		const lines: string[] = [];
-
-		if (userImages.length > 0) {
-			lines.push('## Reference Images (uploaded by user)');
-			lines.push('Use view_image to examine reference material the user has provided.', '');
-			for (const img of userImages) {
-				lines.push(`- **${img.label}** (id: ${img.id})`);
-			}
-			lines.push('');
-		}
-
-		if (generatedImages.length > 0) {
-			lines.push('## Generated Images');
-			lines.push('Use view_image to review previous generations.', '');
-			for (const img of generatedImages) {
-				const desc = img.generationContext
-					? ` — ${img.generationContext.slice(0, 120)}${img.generationContext.length > 120 ? '...' : ''}`
-					: '';
-				lines.push(`- **${img.label}** (id: ${img.id})${desc}`);
-			}
-		}
-
-		imageIndexSection = lines.join('\n');
-	}
-
 	return interpolate(systemTemplate, {
 		projectName,
-		memorySection,
-		imageIndexSection
+		memorySection: buildMemorySection(memoryTopics),
+		imageIndexSection: buildImageIndex(projectImages)
 	});
 }
 
@@ -150,6 +145,47 @@ function buildHistory(messages: Message[]): Content[] {
 	}));
 }
 
+// ── Helpers ──
+
+/** Replace binary inline data with size placeholders for debug logging. */
+function redactParts(parts: Part[]): unknown[] {
+	return parts.map((p) => {
+		if ('inlineData' in p && p.inlineData) {
+			const kb = Math.ceil((p.inlineData.data?.length ?? 0) / 1024);
+			return { inlineData: { mimeType: p.inlineData.mimeType, data: `[${kb}KB base64]` } };
+		}
+		if ('functionResponse' in p && p.functionResponse) {
+			return { functionResponse: p.functionResponse };
+		}
+		return p;
+	});
+}
+
+/** Store attachments and encode them as inline data parts for the API. */
+async function processAttachments(
+	attachments: UserAttachment[],
+	actions: TurnActions
+): Promise<{ ids: string[]; parts: Part[] }> {
+	const ids: string[] = [];
+	const parts: Part[] = [];
+	for (const attachment of attachments) {
+		const stored = await actions.storeImage(attachment.blob, attachment.label, { source: 'user' });
+		ids.push(stored.id);
+		const base64 = await blobToBase64(attachment.blob);
+		parts.push({
+			inlineData: { data: base64, mimeType: attachment.blob.type || 'image/png' }
+		});
+	}
+	return { ids, parts };
+}
+
+/** Append image references like [image:id] to text, if any. */
+function appendImageRefs(text: string, imageIds: string[]): string {
+	if (imageIds.length === 0) return text;
+	const refs = imageIds.map((id) => `[image:${id}]`).join(' ');
+	return `${text}\n\n${refs}`;
+}
+
 // ── Tool execution ──
 
 interface ToolExecResult {
@@ -159,166 +195,166 @@ interface ToolExecResult {
 	imageId?: string;
 }
 
+type ToolArgs = Record<string, unknown>;
+
+/** Build a functionResponse part. */
+function toolResponse(name: string, response: Record<string, unknown>): Part {
+	return { functionResponse: { name, response } };
+}
+
+/** Build a ToolExecResult for an error, emitting an event. */
+function toolError(name: string, err: unknown, label: string, onEvent: EventCallback): ToolExecResult {
+	const msg = err instanceof Error ? err.message : String(err);
+	onEvent({ type: 'error', message: `${label}: ${msg}` });
+	return { responseParts: [toolResponse(name, { error: msg })] };
+}
+
+async function handleGenerateImage(
+	name: string, args: ToolArgs, ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
+): Promise<ToolExecResult> {
+	const label = (args.label as string) || 'generated_image';
+	const prompt = args.prompt as string;
+	const aspectRatio = args.aspect_ratio as string | undefined;
+	const refIds = (args.reference_image_ids as string[] | undefined) ?? [];
+
+	onEvent({ type: 'image_generating', label });
+
+	try {
+		const inputImages: Array<{ data: string; mimeType: string }> = [];
+		for (const refId of refIds) {
+			const img = await actions.getImage(refId);
+			if (img) {
+				const data = await blobToBase64(img.blob);
+				inputImages.push({ data, mimeType: img.mimeType });
+			}
+		}
+
+		const imageResponse = await generateImage(ctx.apiKey, ctx.imageModel, prompt, {
+			aspectRatio,
+			inputImages: inputImages.length > 0 ? inputImages : undefined
+		});
+		const blob = imageDataToBlob(imageResponse.imageData, imageResponse.mimeType);
+		const stored = await actions.storeImage(blob, label, { generationContext: prompt });
+
+		onEvent({ type: 'image_complete', imageId: stored.id, label });
+
+		const response: Record<string, unknown> = {
+			output: `Image generated: [image:${stored.id}] "${label}"`
+		};
+		const thumb = await actions.getImageThumbnail(stored.id);
+		if (thumb) {
+			response.thumbnail = { base64: thumb.base64, mimeType: thumb.mimeType };
+		}
+		return {
+			responseParts: [toolResponse(name, response)],
+			imageId: stored.id
+		};
+	} catch (err) {
+		return toolError(name, err, 'Image generation failed', onEvent);
+	}
+}
+
+async function handleViewImage(
+	name: string, args: ToolArgs, actions: TurnActions, onEvent: EventCallback
+): Promise<ToolExecResult> {
+	const imageId = args.image_id as string;
+	const reason = args.reason as string | undefined;
+
+	onEvent({ type: 'image_viewing', imageId, reason });
+
+	try {
+		const thumb = await actions.getImageThumbnail(imageId);
+		if (!thumb) {
+			return { responseParts: [toolResponse(name, { error: `Image not found: ${imageId}` })] };
+		}
+
+		return {
+			responseParts: [
+				toolResponse(name, {
+					output: `Showing image ${imageId}`,
+					image: { base64: thumb.base64, mimeType: thumb.mimeType }
+				})
+			]
+		};
+	} catch (err) {
+		return toolError(name, err, 'Failed to view image', onEvent);
+	}
+}
+
+async function handleReadMemory(
+	name: string, args: ToolArgs, actions: TurnActions, onEvent: EventCallback
+): Promise<ToolExecResult> {
+	const slug = args.topic as string;
+
+	try {
+		const topic = await actions.getMemoryTopicBySlug(slug);
+		if (!topic) {
+			const allTopics = await actions.listMemoryTopics();
+			const available = allTopics.map((t) => t.slug).join(', ');
+			const hint = available
+				? `Topic "${slug}" not found. Available topics: ${available}`
+				: `Topic "${slug}" not found. No topics exist yet. Use update_memory to create one.`;
+			return { responseParts: [toolResponse(name, { error: hint })] };
+		}
+
+		return {
+			responseParts: [
+				toolResponse(name, { slug: topic.slug, title: topic.title, content: topic.content })
+			]
+		};
+	} catch (err) {
+		return toolError(name, err, 'Failed to read memory', onEvent);
+	}
+}
+
+async function handleUpdateMemory(
+	name: string, args: ToolArgs, actions: TurnActions, onEvent: EventCallback
+): Promise<ToolExecResult> {
+	const slug = args.topic as string;
+	const title = args.title as string;
+	const summary = args.summary as string;
+	const content = args.content as string;
+
+	try {
+		await actions.upsertMemoryTopic(slug, title, summary, content);
+		onEvent({ type: 'memory_updated', slug });
+
+		const verb = content.trim() ? 'updated' : 'deleted';
+		return { responseParts: [toolResponse(name, { output: `Memory topic "${slug}" ${verb}.` })] };
+	} catch (err) {
+		return toolError(name, err, 'Failed to update memory', onEvent);
+	}
+}
+
+type ToolHandler = (
+	name: string, args: ToolArgs, ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
+) => Promise<ToolExecResult>;
+
+const toolHandlers: Record<string, ToolHandler> = {
+	generate_image: handleGenerateImage,
+	view_image: (name, args, _ctx, actions, onEvent) => handleViewImage(name, args, actions, onEvent),
+	read_memory: (name, args, _ctx, actions, onEvent) => handleReadMemory(name, args, actions, onEvent),
+	update_memory: (name, args, _ctx, actions, onEvent) => handleUpdateMemory(name, args, actions, onEvent),
+};
+
 async function executeToolCall(
 	call: FunctionCall,
 	ctx: TurnContext,
 	actions: TurnActions,
 	onEvent: EventCallback
 ): Promise<ToolExecResult> {
-	const args = call.args ?? {};
 	const name = call.name ?? 'unknown';
+	const args = call.args ?? {};
+	const handler = toolHandlers[name];
 
-	if (name === 'generate_image') {
-		const label = (args.label as string) || 'generated_image';
-		const prompt = args.prompt as string;
-		const aspectRatio = args.aspect_ratio as string | undefined;
-		const refIds = (args.reference_image_ids as string[] | undefined) ?? [];
-
-		onEvent({ type: 'image_generating', label });
-
-		try {
-			// Fetch reference images and convert to base64 for the image model.
-			const inputImages: Array<{ data: string; mimeType: string }> = [];
-			for (const refId of refIds) {
-				const img = await actions.getImage(refId);
-				if (img) {
-					const data = await blobToBase64(img.blob);
-					inputImages.push({ data, mimeType: img.mimeType });
-				}
-			}
-
-			const imageResponse = await generateImage(ctx.apiKey, ctx.imageModel, prompt, {
-				aspectRatio,
-				inputImages: inputImages.length > 0 ? inputImages : undefined
-			});
-			const blob = imageDataToBlob(imageResponse.imageData, imageResponse.mimeType);
-			const stored = await actions.storeImage(blob, label, { generationContext: prompt });
-
-			onEvent({ type: 'image_complete', imageId: stored.id, label });
-
-			// Return the thumbnail so the model can see what was generated.
-			const thumb = await actions.getImageThumbnail(stored.id);
-			const parts: Part[] = [
-				{
-					functionResponse: {
-						name,
-						response: { output: `Image generated: [image:${stored.id}] "${label}"` }
-					}
-				}
-			];
-			if (thumb) {
-				parts.push({ inlineData: { data: thumb.base64, mimeType: thumb.mimeType } });
-			}
-			return { responseParts: parts, imageId: stored.id };
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			onEvent({ type: 'error', message: `Image generation failed: ${msg}` });
-			return {
-				responseParts: [{ functionResponse: { name, response: { error: msg } } }]
-			};
-		}
+	if (!handler) {
+		return { responseParts: [toolResponse(name, { error: `Unknown tool: ${name}` })] };
 	}
 
-	if (name === 'view_image') {
-		const imageId = args.image_id as string;
-		const reason = args.reason as string | undefined;
-
-		onEvent({ type: 'image_viewing', imageId, reason });
-
-		try {
-			const thumb = await actions.getImageThumbnail(imageId);
-			if (!thumb) {
-				return {
-					responseParts: [
-						{ functionResponse: { name, response: { error: `Image not found: ${imageId}` } } }
-					]
-				};
-			}
-
-			return {
-				responseParts: [
-					{ functionResponse: { name, response: { output: `Showing image ${imageId}` } } },
-					{ inlineData: { data: thumb.base64, mimeType: thumb.mimeType } }
-				]
-			};
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			onEvent({ type: 'error', message: `Failed to view image: ${msg}` });
-			return {
-				responseParts: [{ functionResponse: { name, response: { error: msg } } }]
-			};
-		}
-	}
-
-	if (name === 'read_memory') {
-		const slug = args.topic as string;
-
-		try {
-			const topic = await actions.getMemoryTopicBySlug(slug);
-
-			if (!topic) {
-				const allTopics = await actions.listMemoryTopics();
-				const available = allTopics.map((t) => t.slug).join(', ');
-				const hint = available
-					? `Topic "${slug}" not found. Available topics: ${available}`
-					: `Topic "${slug}" not found. No topics exist yet. Use update_memory to create one.`;
-				return {
-					responseParts: [{ functionResponse: { name, response: { error: hint } } }]
-				};
-			}
-
-			return {
-				responseParts: [
-					{ functionResponse: { name, response: { slug: topic.slug, title: topic.title, content: topic.content } } }
-				]
-			};
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			onEvent({ type: 'error', message: `Failed to read memory: ${msg}` });
-			return {
-				responseParts: [{ functionResponse: { name, response: { error: msg } } }]
-			};
-		}
-	}
-
-	if (name === 'update_memory') {
-		const slug = args.topic as string;
-		const title = args.title as string;
-		const summary = args.summary as string;
-		const content = args.content as string;
-
-		try {
-			await actions.upsertMemoryTopic(slug, title, summary, content);
-			onEvent({ type: 'memory_updated', slug });
-
-			const action = content.trim() ? 'updated' : 'deleted';
-			return {
-				responseParts: [
-					{ functionResponse: { name, response: { output: `Memory topic "${slug}" ${action}.` } } }
-				]
-			};
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			onEvent({ type: 'error', message: `Failed to update memory: ${msg}` });
-			return {
-				responseParts: [{ functionResponse: { name, response: { error: msg } } }]
-			};
-		}
-	}
-
-	return {
-		responseParts: [
-			{ functionResponse: { name, response: { error: `Unknown tool: ${name}` } } }
-		]
-	};
+	return handler(name, args, ctx, actions, onEvent);
 }
 
 // ── Main orchestration loop ──
-
-export interface UserAttachment {
-	blob: Blob;
-	label: string;
-}
 
 export async function runAgentTurn(
 	ctx: TurnContext,
@@ -327,11 +363,9 @@ export async function runAgentTurn(
 	onEvent: EventCallback,
 	attachments: UserAttachment[] = []
 ): Promise<TurnResult> {
-	const emptyResult: TurnResult = { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [] };
-
 	if (!ctx.apiKey) {
 		onEvent({ type: 'error', message: 'No API key configured. Add your Gemini API key in settings.' });
-		return emptyResult;
+		return { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [] };
 	}
 
 	const systemPrompt = buildSystemPrompt(ctx.projectName, ctx.memoryTopics, ctx.projectImages);
@@ -343,132 +377,92 @@ export async function runAgentTurn(
 		thinkingConfig: { includeThoughts: true, thinkingLevel: ThinkingLevel.LOW }
 	};
 
-	// Store and encode user-attached images.
-	const userImageIds: string[] = [];
-	const userImageParts: Part[] = [];
-	for (const attachment of attachments) {
-		const stored = await actions.storeImage(attachment.blob, attachment.label, { source: 'user' });
-		userImageIds.push(stored.id);
-		const base64 = await blobToBase64(attachment.blob);
-		userImageParts.push({
-			inlineData: { data: base64, mimeType: attachment.blob.type || 'image/png' }
-		});
-	}
+	const { ids: userImageIds, parts: userImageParts } = await processAttachments(attachments, actions);
 
 	let history = buildHistory(ctx.messages);
-	let currentUserParts: Part[] = [{ text: userText }, ...userImageParts];
-	let allAssistantText = '';
-	let allImageIds: string[] = [];
+	let currentParts: Part[] = [{ text: userText }, ...userImageParts];
+	let accumulatedText = '';
+	const generatedImageIds: string[] = [];
 
-	for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-		onEvent({ type: 'status', text: round === 0 ? 'Thinking...' : 'Processing tool results...' });
+	try {
+		for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+			onEvent({ type: 'status', text: round === 0 ? 'Thinking...' : 'Processing tool results...' });
+			onEvent({ type: 'debug_request', round, parts: redactParts(currentParts), historyLength: history.length });
 
-		// Summarize parts for debug (replace binary data with placeholders).
-		const debugParts = currentUserParts.map((p) => {
-			if ('inlineData' in p && p.inlineData) {
-				return { inlineData: { mimeType: p.inlineData.mimeType, data: `[${Math.ceil((p.inlineData.data?.length ?? 0) / 1024)}KB base64]` } };
-			}
-			if ('functionResponse' in p && p.functionResponse) {
-				return { functionResponse: p.functionResponse };
-			}
-			return p;
-		});
-		onEvent({ type: 'debug_request', round, parts: debugParts, historyLength: history.length });
-
-		const { stream, getResult } = await sendMessageStreaming(
-			ctx.apiKey,
-			ctx.textModel,
-			currentUserParts,
-			history,
-			config
-		);
-
-		let roundText = '';
-		const roundFunctionCalls: { name: string; args: unknown }[] = [];
-
-		for await (const chunk of stream) {
-			if (chunk.textDelta) {
-				roundText += chunk.textDelta;
-				onEvent({ type: 'text_delta', text: chunk.textDelta });
-			}
-			if (chunk.thoughtDelta) {
-				onEvent({ type: 'thought_delta', text: chunk.thoughtDelta });
-			}
-			if (chunk.functionCalls) {
-				for (const fc of chunk.functionCalls) {
-					roundFunctionCalls.push({ name: fc.name ?? 'unknown', args: fc.args });
-				}
-			}
-		}
-
-		const result = await getResult();
-		history = result.history;
-
-		onEvent({
-			type: 'debug_response',
-			round,
-			text: result.text,
-			functionCalls: roundFunctionCalls
-		});
-
-		if (roundText) {
-			allAssistantText += (allAssistantText ? '\n\n' : '') + roundText;
-		}
-
-		// No function calls means the agent is done.
-		if (result.functionCalls.length === 0) break;
-
-		// Execute function calls and collect response parts.
-		const allResponseParts: Part[] = [];
-
-		for (const call of result.functionCalls) {
-			const callArgs = (call.args ?? {}) as Record<string, unknown>;
-			onEvent({ type: 'debug_tool_exec', name: call.name ?? 'unknown', args: callArgs });
-
-			const { responseParts, imageId } = await executeToolCall(
-				call,
-				ctx,
-				actions,
-				onEvent
+			const { stream, getResult } = await sendMessageStreaming(
+				ctx.apiKey,
+				ctx.textModel,
+				currentParts,
+				history,
+				config
 			);
 
-			// Summarize tool result for debug (strip binary).
-			const debugResult = responseParts.map((p) => {
-				if ('inlineData' in p && p.inlineData) {
-					return { inlineData: { mimeType: p.inlineData.mimeType, data: '[thumbnail]' } };
-				}
-				if ('functionResponse' in p && p.functionResponse) {
-					return { functionResponse: p.functionResponse };
-				}
-				return p;
-			});
-			onEvent({ type: 'debug_tool_result', name: call.name ?? 'unknown', result: debugResult });
+			let roundText = '';
+			const debugFunctionCalls: { name: string; args: unknown }[] = [];
 
-			if (imageId) allImageIds.push(imageId);
-			allResponseParts.push(...responseParts);
+			for await (const chunk of stream) {
+				if (chunk.textDelta) {
+					roundText += chunk.textDelta;
+					onEvent({ type: 'text_delta', text: chunk.textDelta });
+				}
+				if (chunk.thoughtDelta) {
+					onEvent({ type: 'thought_delta', text: chunk.thoughtDelta });
+				}
+				if (chunk.functionCalls) {
+					for (const fc of chunk.functionCalls) {
+						debugFunctionCalls.push({ name: fc.name ?? 'unknown', args: fc.args });
+					}
+				}
+			}
+
+			const result = await getResult();
+			history = result.history;
+
+			onEvent({ type: 'debug_response', round, text: result.text, functionCalls: debugFunctionCalls });
+
+			if (roundText) {
+				accumulatedText += (accumulatedText ? '\n\n' : '') + roundText;
+			}
+
+			if (result.functionCalls.length === 0) break;
+
+			// Execute function calls and collect response parts.
+			const responseParts: Part[] = [];
+
+			for (const call of result.functionCalls) {
+				const callArgs = (call.args ?? {}) as Record<string, unknown>;
+				onEvent({ type: 'debug_tool_exec', name: call.name ?? 'unknown', args: callArgs });
+
+				const execResult = await executeToolCall(call, ctx, actions, onEvent);
+
+				onEvent({ type: 'debug_tool_result', name: call.name ?? 'unknown', result: redactParts(execResult.responseParts) });
+
+				if (execResult.imageId) generatedImageIds.push(execResult.imageId);
+				responseParts.push(...execResult.responseParts);
+			}
+
+			currentParts = responseParts;
 		}
 
-		// Feed function results (and any inline images) back as the next message.
-		currentUserParts = allResponseParts;
-
-		if (round === MAX_TOOL_ROUNDS - 1) {
-			onEvent({ type: 'error', message: `Agent stopped after ${MAX_TOOL_ROUNDS} tool rounds. Some pending tool calls were not executed.` });
+		// If the loop ended because we hit the round limit (not a break),
+		// the last round's tool results were sent but the model never responded.
+		const exhausted = currentParts.some((p) => 'functionResponse' in p);
+		if (exhausted) {
+			onEvent({ type: 'error', message: `Agent stopped after ${MAX_TOOL_ROUNDS} tool rounds. Tool results were not sent back to the model.` });
 		}
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		onEvent({ type: 'error', message: `API error: ${msg}` });
 	}
 
-	// Build the final texts with image references for the caller to persist.
-	const userImageRefs = userImageIds.map((id) => `[image:${id}]`).join(' ');
-	const finalUserText = userImageRefs ? `${userText}\n\n${userImageRefs}` : userText;
+	const finalAssistantText = appendImageRefs(accumulatedText, generatedImageIds);
 
-	const imageRefs = allImageIds.map((id) => `[image:${id}]`).join(' ');
-	const finalAssistantText = imageRefs ? `${allAssistantText}\n\n${imageRefs}` : allAssistantText;
-
-	onEvent({ type: 'done', assistantText: finalAssistantText, imageIds: allImageIds });
+	onEvent({ type: 'done', assistantText: finalAssistantText, imageIds: generatedImageIds });
 
 	return {
-		userText: finalUserText,
+		userText: appendImageRefs(userText, userImageIds),
 		userImageIds,
 		assistantText: finalAssistantText,
-		assistantImageIds: allImageIds
+		assistantImageIds: generatedImageIds
 	};
 }

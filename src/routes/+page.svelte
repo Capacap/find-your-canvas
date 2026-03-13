@@ -172,6 +172,7 @@
 				resolveImageId(event.imageId);
 				statusText = `Generated: ${event.label}`;
 			}
+			else if (event.type === 'image_viewing') statusText = `Viewing image...`;
 			else if (event.type === 'memory_updated') {
 				refreshMemoryTopics();
 				statusText = `Memory updated: ${event.slug}`;
