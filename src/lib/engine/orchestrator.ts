@@ -12,7 +12,7 @@
  * via TurnContext, and all side effects go through TurnActions.
  */
 import { Type, ThinkingLevel, type Content, type FunctionCall, type FunctionDeclaration, type Part } from '@google/genai';
-import type { Message, AgentMemory, ImageMeta, ImageBlob, ImageSource } from '$lib/types/schema';
+import type { AgentMemory, ImageMeta, ImageBlob, ImageSource } from '$lib/types/schema';
 import { sendMessageStreaming, generateImage } from './gemini';
 import { blobToBase64, base64ToBlob } from '$lib/utils';
 import {
@@ -51,7 +51,8 @@ export interface TurnContext {
 	projectName: string;
 	agentMemories: AgentMemory[];
 	projectImages: ImageMeta[];
-	messages: Message[];
+	/** Raw Gemini history from the conversation, passed directly to the API. */
+	apiHistory: Content[];
 }
 
 /** Side effects the orchestrator can perform during tool execution. */
@@ -70,6 +71,8 @@ export interface TurnResult {
 	userImageIds: string[];
 	assistantText: string;
 	assistantImageIds: string[];
+	/** Updated Gemini history including this turn, for storage on the conversation. */
+	apiHistory: Content[];
 }
 
 export interface UserAttachment {
@@ -134,16 +137,6 @@ function buildSystemPrompt(
 		memorySection: buildMemorySection(agentMemories),
 		imageIndexSection: buildImageIndex(projectImages)
 	});
-}
-
-// ── History conversion ──
-
-/** Convert stored messages to Gemini Content[] for the API. */
-function buildHistory(messages: Message[]): Content[] {
-	return messages.map((m) => ({
-		role: m.role === 'assistant' ? 'model' : 'user',
-		parts: [{ text: m.text }]
-	}));
 }
 
 // ── Helpers ──
@@ -467,7 +460,7 @@ export async function runAgentTurn(
 ): Promise<TurnResult> {
 	if (turnInProgress) {
 		onEvent({ type: 'error', message: 'A turn is already in progress.' });
-		return { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [] };
+		return { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [], apiHistory: ctx.apiHistory };
 	}
 	turnInProgress = true;
 
@@ -487,7 +480,7 @@ async function runAgentTurnInner(
 ): Promise<TurnResult> {
 	if (!ctx.apiKey) {
 		onEvent({ type: 'error', message: 'No API key configured. Add your Gemini API key in settings.' });
-		return { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [] };
+		return { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [], apiHistory: ctx.apiHistory };
 	}
 
 	const systemPrompt = buildSystemPrompt(ctx.projectName, ctx.agentMemories, ctx.projectImages);
@@ -501,7 +494,7 @@ async function runAgentTurnInner(
 
 	const { ids: userImageIds, parts: userImageParts } = await processAttachments(attachments, actions);
 
-	let history = buildHistory(ctx.messages);
+	let apiHistory = ctx.apiHistory;
 	let currentParts: Part[] = [{ text: userText }, ...userImageParts];
 	let accumulatedText = '';
 	const generatedImageIds: string[] = [];
@@ -509,13 +502,13 @@ async function runAgentTurnInner(
 	try {
 		for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
 			onEvent({ type: 'status', text: round === 0 ? 'Thinking...' : 'Processing tool results...' });
-			onEvent({ type: 'debug_request', round, parts: redactParts(currentParts), historyLength: history.length });
+			onEvent({ type: 'debug_request', round, parts: redactParts(currentParts), historyLength: apiHistory.length });
 
 			const { stream, getResult } = await sendMessageStreaming(
 				ctx.apiKey,
 				ctx.textModel,
 				currentParts,
-				history,
+				apiHistory,
 				config
 			);
 
@@ -538,7 +531,7 @@ async function runAgentTurnInner(
 			}
 
 			const result = getResult();
-			history = result.history;
+			apiHistory = result.history;
 
 			onEvent({ type: 'debug_response', round, text: result.text, functionCalls: debugFunctionCalls });
 
@@ -576,7 +569,7 @@ async function runAgentTurnInner(
 		const msg = err instanceof Error ? err.message : String(err);
 		onEvent({ type: 'error', message: `API error: ${msg}` });
 		onEvent({ type: 'done', assistantText: '', imageIds: [] });
-		return { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [] };
+		return { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [], apiHistory: ctx.apiHistory };
 	}
 
 	const finalAssistantText = appendImageRefs(accumulatedText, generatedImageIds);
@@ -587,6 +580,7 @@ async function runAgentTurnInner(
 		userText: appendImageRefs(userText, userImageIds),
 		userImageIds,
 		assistantText: finalAssistantText,
-		assistantImageIds: generatedImageIds
+		assistantImageIds: generatedImageIds,
+		apiHistory
 	};
 }

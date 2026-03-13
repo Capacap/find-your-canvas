@@ -1,7 +1,7 @@
 /**
  * Reactive app state using Svelte 5 runes.
  */
-import type { Project, Conversation, Message, ImageMeta, Settings, AgentMemory } from '$lib/types/schema';
+import type { Project, Conversation, ChatMessage, ImageMeta, Settings, AgentMemory } from '$lib/types/schema';
 import * as ops from '$lib/db/operations';
 import { downloadProjectZip, importProject } from '$lib/db/zip';
 
@@ -10,7 +10,7 @@ let currentProject = $state<Project | null>(null);
 let currentConversation = $state<Conversation | null>(null);
 let projects = $state<Project[]>([]);
 let conversations = $state<Conversation[]>([]);
-let messages = $state<Message[]>([]);
+let messages = $state<ChatMessage[]>([]);
 let projectImages = $state<ImageMeta[]>([]);
 let agentMemories = $state<AgentMemory[]>([]);
 let settings = $state<Settings | null>(null);
@@ -128,7 +128,7 @@ export async function renameConversation(id: string, title: string): Promise<voi
 	}
 }
 
-export function appendMessage(msg: Message): void {
+export function appendMessage(msg: ChatMessage): void {
 	messages = [...messages, msg];
 }
 

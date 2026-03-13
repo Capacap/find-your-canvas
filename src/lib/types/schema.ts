@@ -1,9 +1,14 @@
+import type { Content } from '@google/genai';
+
 /**
  * Core data types for the creative assistant.
  *
  * Design principles:
  * - Images are always referenced by ID, never stored inline as base64.
- * - Conversation history stays small by using image references like [image:id].
+ * - Conversations store two parallel representations: ChatMessage records
+ *   for UI display, and a raw Gemini Content[] (apiHistory) for API
+ *   continuity. The two are populated independently and never derived
+ *   from each other.
  * - All timestamps are Unix milliseconds for IndexedDB indexing.
  */
 
@@ -16,28 +21,35 @@ export interface Project {
 	updatedAt: number;
 }
 
-/** A conversation thread within a project. */
+/**
+ * A conversation thread within a project.
+ *
+ * Chat messages (ChatMessage[]) and API history (apiHistory) are stored
+ * separately. Messages are the UI-facing representation; apiHistory
+ * preserves the full Gemini protocol state (tool calls, thought
+ * signatures, inline thumbnails) needed to continue the session.
+ */
 export interface Conversation {
 	id: string;
 	projectId: string;
 	title: string;
+	/** Gemini Content[] for API continuity. Includes tool call/response structure and thought signatures. */
+	apiHistory: Content[];
 	createdAt: number;
 	updatedAt: number;
 }
 
-/** Role in a conversation turn. */
-export type MessageRole = 'user' | 'assistant';
+export type ChatMessageRole = 'user' | 'assistant';
 
 /**
- * A single message in a conversation.
- *
- * The text field may contain image references like [image:abc123] which
- * get resolved to object URLs at render time.
+ * UI-facing record for a single chat message. Stores human-readable text
+ * with [image:id] references resolved at render time. Not used for API
+ * calls; see Conversation.apiHistory for that.
  */
-export interface Message {
+export interface ChatMessage {
 	id: string;
 	conversationId: string;
-	role: MessageRole;
+	role: ChatMessageRole;
 	text: string;
 	/** IDs of images generated or attached in this message. */
 	imageIds: string[];

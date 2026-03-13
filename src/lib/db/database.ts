@@ -2,7 +2,7 @@ import Dexie, { type EntityTable } from 'dexie';
 import type {
 	Project,
 	Conversation,
-	Message,
+	ChatMessage,
 	ImageMeta,
 	ImageBlob,
 	Settings,
@@ -12,7 +12,7 @@ import type {
 class BananaDB extends Dexie {
 	projects!: EntityTable<Project, 'id'>;
 	conversations!: EntityTable<Conversation, 'id'>;
-	messages!: EntityTable<Message, 'id'>;
+	messages!: EntityTable<ChatMessage, 'id'>;
 	imageMeta!: EntityTable<ImageMeta, 'id'>;
 	imageBlobs!: EntityTable<ImageBlob, 'id'>;
 	agentMemories!: EntityTable<AgentMemory, 'id'>;

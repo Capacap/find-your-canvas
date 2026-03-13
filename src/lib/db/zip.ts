@@ -20,7 +20,7 @@ import {
 import type {
 	Project,
 	Conversation,
-	Message,
+	ChatMessage,
 	ImageMeta,
 	ImageBlob,
 	AgentMemory
@@ -31,7 +31,7 @@ interface ExportManifest {
 	exportedAt: number;
 	project: Project;
 	conversations: Conversation[];
-	messages: Message[];
+	messages: ChatMessage[];
 	agentMemories: AgentMemory[];
 }
 

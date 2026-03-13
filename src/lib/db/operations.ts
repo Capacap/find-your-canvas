@@ -9,7 +9,7 @@ import { blobToBase64 } from '$lib/utils';
 import type {
 	Project,
 	Conversation,
-	Message,
+	ChatMessage,
 	ImageMeta,
 	ImageBlob,
 	Settings,
@@ -158,6 +158,7 @@ export async function createConversation(projectId: string, title: string): Prom
 		id: generateId(),
 		projectId,
 		title,
+		apiHistory: [],
 		createdAt: timestamp,
 		updatedAt: timestamp
 	};
@@ -181,6 +182,10 @@ export async function updateConversation(
 	patch: Partial<Pick<Conversation, 'title'>>
 ): Promise<void> {
 	await db.conversations.update(id, { ...patch, updatedAt: now() });
+}
+
+export async function updateConversationHistory(id: string, apiHistory: Conversation['apiHistory']): Promise<void> {
+	await db.conversations.update(id, { apiHistory, updatedAt: now() });
 }
 
 export async function deleteConversation(id: string): Promise<void> {
@@ -209,12 +214,12 @@ export async function deleteConversation(id: string): Promise<void> {
 export async function addMessage(
 	projectId: string,
 	conversationId: string,
-	role: Message['role'],
+	role: ChatMessage['role'],
 	text: string,
 	imageIds: string[] = []
-): Promise<Message> {
+): Promise<ChatMessage> {
 	const timestamp = now();
-	const message: Message = {
+	const message: ChatMessage = {
 		id: generateId(),
 		conversationId,
 		role,
@@ -231,7 +236,7 @@ export async function addMessage(
 	return message;
 }
 
-export async function listMessages(conversationId: string): Promise<Message[]> {
+export async function listMessages(conversationId: string): Promise<ChatMessage[]> {
 	return db.messages
 		.where('conversationId')
 		.equals(conversationId)
@@ -333,7 +338,7 @@ export async function getImageThumbnailBase64(imageId: string): Promise<{ base64
 export interface ProjectExportData {
 	project: Project;
 	conversations: Conversation[];
-	messages: Message[];
+	messages: ChatMessage[];
 	imageMeta: ImageMeta[];
 	agentMemories: AgentMemory[];
 }

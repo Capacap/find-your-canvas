@@ -145,7 +145,7 @@
 			projectName: app.currentProject.name,
 			agentMemories: app.agentMemories,
 			projectImages: app.projectImages,
-			messages: app.messages
+			apiHistory: app.currentConversation?.apiHistory ?? []
 		};
 
 		const actions: TurnActions = {
@@ -191,11 +191,12 @@
 		try {
 			const result = await runAgentTurn(ctx, actions, text, onEvent, attachments);
 
-			// Persist messages from the turn result.
+			// Persist messages and API history from the turn result.
 			await ops.addMessage(projectId, conversationId, 'user', result.userText, result.userImageIds);
 			if (result.assistantText) {
 				await ops.addMessage(projectId, conversationId, 'assistant', result.assistantText, result.assistantImageIds);
 			}
+			await ops.updateConversationHistory(conversationId, result.apiHistory);
 
 			await refreshMessages();
 			await refreshProjectImages();
