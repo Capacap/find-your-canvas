@@ -12,7 +12,7 @@
  * via TurnContext, and all side effects go through TurnActions.
  */
 import { Type, ThinkingLevel, type Content, type FunctionCall, type FunctionDeclaration, type Part } from '@google/genai';
-import type { Message, MemoryTopic, StoredImage, ImageSource } from '$lib/types/schema';
+import type { Message, AgentMemory, ImageMeta, ImageBlob, ImageSource } from '$lib/types/schema';
 import { sendMessageStreaming, generateImage } from './gemini';
 import { blobToBase64, base64ToBlob } from './utils';
 import {
@@ -49,19 +49,19 @@ export interface TurnContext {
 	textModel: string;
 	imageModel: string;
 	projectName: string;
-	memoryTopics: MemoryTopic[];
-	projectImages: StoredImage[];
+	agentMemories: AgentMemory[];
+	projectImages: ImageMeta[];
 	messages: Message[];
 }
 
 /** Side effects the orchestrator can perform during tool execution. */
 export interface TurnActions {
-	storeImage(blob: Blob, label: string, opts?: { source?: ImageSource; generationContext?: string }): Promise<StoredImage>;
-	getImage(id: string): Promise<StoredImage | undefined>;
+	storeImage(blob: Blob, label: string, opts?: { source?: ImageSource; generationContext?: string }): Promise<ImageMeta>;
+	getImage(id: string): Promise<(ImageMeta & ImageBlob) | undefined>;
 	getImageThumbnail(id: string): Promise<{ base64: string; mimeType: string } | undefined>;
-	getMemoryTopicBySlug(slug: string): Promise<MemoryTopic | undefined>;
-	listMemoryTopics(): Promise<MemoryTopic[]>;
-	upsertMemoryTopic(slug: string, title: string, summary: string, content: string): Promise<void>;
+	getAgentMemoryBySlug(slug: string): Promise<AgentMemory | undefined>;
+	listAgentMemories(): Promise<AgentMemory[]>;
+	upsertAgentMemory(slug: string, title: string, summary: string, content: string): Promise<void>;
 }
 
 /** What the caller needs to persist after a turn completes. */
@@ -84,7 +84,7 @@ const MAX_TOOL_ROUNDS = 5;
 
 // ── System prompt construction ──
 
-function buildMemorySection(topics: MemoryTopic[]): string {
+function buildMemorySection(topics: AgentMemory[]): string {
 	if (topics.length === 0) return memoryEmptyTemplate;
 
 	const rows = topics.map((t) =>
@@ -93,7 +93,7 @@ function buildMemorySection(topics: MemoryTopic[]): string {
 	return interpolate(memoryIndexTemplate, { rows });
 }
 
-function buildImageIndex(images: StoredImage[]): string {
+function buildImageIndex(images: ImageMeta[]): string {
 	if (images.length === 0) return '';
 
 	const userImages = images.filter((img) => img.source === 'user');
@@ -126,12 +126,12 @@ function buildImageIndex(images: StoredImage[]): string {
 
 function buildSystemPrompt(
 	projectName: string,
-	memoryTopics: MemoryTopic[],
-	projectImages: StoredImage[]
+	agentMemories: AgentMemory[],
+	projectImages: ImageMeta[]
 ): string {
 	return interpolate(systemTemplate, {
 		projectName,
-		memorySection: buildMemorySection(memoryTopics),
+		memorySection: buildMemorySection(agentMemories),
 		imageIndexSection: buildImageIndex(projectImages)
 	});
 }
@@ -385,9 +385,9 @@ async function handleReadMemory(
 	const slug = args.topic as string;
 
 	try {
-		const topic = await actions.getMemoryTopicBySlug(slug);
+		const topic = await actions.getAgentMemoryBySlug(slug);
 		if (!topic) {
-			const allTopics = await actions.listMemoryTopics();
+			const allTopics = await actions.listAgentMemories();
 			const available = allTopics.map((t) => t.slug).join(', ');
 			const hint = available
 				? `Topic "${slug}" not found. Available topics: ${available}`
@@ -414,7 +414,7 @@ async function handleUpdateMemory(
 	const content = args.content as string;
 
 	try {
-		await actions.upsertMemoryTopic(slug, title, summary, content);
+		await actions.upsertAgentMemory(slug, title, summary, content);
 		onEvent({ type: 'memory_updated', slug });
 
 		const verb = content.trim() ? 'updated' : 'deleted';
@@ -488,7 +488,7 @@ async function runAgentTurnInner(
 		return { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [] };
 	}
 
-	const systemPrompt = buildSystemPrompt(ctx.projectName, ctx.memoryTopics, ctx.projectImages);
+	const systemPrompt = buildSystemPrompt(ctx.projectName, ctx.agentMemories, ctx.projectImages);
 	onEvent({ type: 'debug_system_prompt', prompt: systemPrompt });
 
 	const config = {

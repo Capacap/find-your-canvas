@@ -19,8 +19,9 @@ import type {
 	Project,
 	Conversation,
 	Message,
-	StoredImage,
-	MemoryTopic
+	ImageMeta,
+	ImageBlob,
+	AgentMemory
 } from '$lib/types/schema';
 
 interface ExportManifest {
@@ -29,7 +30,7 @@ interface ExportManifest {
 	project: Project;
 	conversations: Conversation[];
 	messages: Message[];
-	memoryTopics: MemoryTopic[];
+	agentMemories: AgentMemory[];
 }
 
 interface ImageManifestEntry {
@@ -59,6 +60,9 @@ function extensionForMime(mime: string): string {
 export async function exportProject(projectId: string): Promise<Blob> {
 	const data = await getProjectExportData(projectId);
 
+	// Build a lookup from image ID to blob for the export.
+	const blobMap = new Map(data.imageBlobs.map((b) => [b.id, b]));
+
 	const zip = new JSZip();
 
 	const manifest: ExportManifest = {
@@ -67,14 +71,14 @@ export async function exportProject(projectId: string): Promise<Blob> {
 		project: data.project,
 		conversations: data.conversations,
 		messages: data.messages,
-		memoryTopics: data.memoryTopics
+		agentMemories: data.agentMemories
 	};
 	zip.file('project.json', JSON.stringify(manifest, null, 2));
 
 	// Memory topics as individual markdown files.
-	if (data.memoryTopics.length > 0) {
+	if (data.agentMemories.length > 0) {
 		const memoryFolder = zip.folder('memory')!;
-		for (const topic of data.memoryTopics) {
+		for (const topic of data.agentMemories) {
 			memoryFolder.file(`${topic.slug}.md`, `# ${topic.title}\n\n${topic.content}`);
 		}
 	}
@@ -83,20 +87,23 @@ export async function exportProject(projectId: string): Promise<Blob> {
 	const imageIndex: ImageManifestEntry[] = [];
 	const imagesFolder = zip.folder('images')!;
 
-	for (const img of data.images) {
-		const filename = img.id + extensionForMime(img.mimeType);
-		imagesFolder.file(filename, img.blob);
+	for (const meta of data.imageMeta) {
+		const blobs = blobMap.get(meta.id);
+		if (!blobs) continue;
+
+		const filename = meta.id + extensionForMime(meta.mimeType);
+		imagesFolder.file(filename, blobs.blob);
 		imageIndex.push({
-			id: img.id,
-			projectId: img.projectId,
-			messageId: img.messageId,
-			source: img.source,
-			mimeType: img.mimeType,
-			width: img.width,
-			height: img.height,
-			label: img.label,
-			generationContext: img.generationContext,
-			createdAt: img.createdAt,
+			id: meta.id,
+			projectId: meta.projectId,
+			messageId: meta.messageId,
+			source: meta.source,
+			mimeType: meta.mimeType,
+			width: meta.width,
+			height: meta.height,
+			label: meta.label,
+			generationContext: meta.generationContext,
+			createdAt: meta.createdAt,
 			filename
 		});
 	}
@@ -120,19 +127,20 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
 		? JSON.parse(await imageIndexFile.async('text'))
 		: [];
 
-	const images: StoredImage[] = [];
+	const imageMeta: ImageMeta[] = [];
+	const imageBlobs: ImageBlob[] = [];
+
 	for (const entry of imageEntries) {
 		const file = zip.file('images/' + entry.filename);
 		if (!file) continue;
 		const imageBlob = new Blob([await file.async('blob')], { type: entry.mimeType });
 		const thumbnail = await createThumbnail(imageBlob);
-		images.push({
+
+		imageMeta.push({
 			id: entry.id,
 			projectId: entry.projectId,
 			messageId: entry.messageId,
 			source: entry.source ?? 'generated',
-			blob: imageBlob,
-			thumbnail,
 			mimeType: entry.mimeType,
 			width: entry.width,
 			height: entry.height,
@@ -140,14 +148,20 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
 			generationContext: entry.generationContext,
 			createdAt: entry.createdAt
 		});
+		imageBlobs.push({
+			id: entry.id,
+			blob: imageBlob,
+			thumbnail
+		});
 	}
 
 	await importProjectData({
 		project: manifest.project,
 		conversations: manifest.conversations,
 		messages: manifest.messages,
-		images,
-		memoryTopics: manifest.memoryTopics
+		imageMeta,
+		imageBlobs,
+		agentMemories: manifest.agentMemories
 	});
 
 	return manifest.project;

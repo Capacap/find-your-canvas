@@ -1,7 +1,7 @@
 /**
  * Reactive app state using Svelte 5 runes.
  */
-import type { Project, Conversation, Message, StoredImage, Settings, MemoryTopic } from '$lib/types/schema';
+import type { Project, Conversation, Message, ImageMeta, Settings, AgentMemory } from '$lib/types/schema';
 import * as ops from '$lib/db/operations';
 import { downloadProjectZip, importProject } from '$lib/db/zip';
 
@@ -11,8 +11,8 @@ let currentConversation = $state<Conversation | null>(null);
 let projects = $state<Project[]>([]);
 let conversations = $state<Conversation[]>([]);
 let messages = $state<Message[]>([]);
-let projectImages = $state<StoredImage[]>([]);
-let memoryTopics = $state<MemoryTopic[]>([]);
+let projectImages = $state<ImageMeta[]>([]);
+let agentMemories = $state<AgentMemory[]>([]);
 let settings = $state<Settings | null>(null);
 
 // Image URL cache: imageId -> objectURL
@@ -22,7 +22,7 @@ export function getAppState() {
 	return {
 		get currentProject() { return currentProject; },
 		get currentConversation() { return currentConversation; },
-		get memoryTopics() { return memoryTopics; },
+		get agentMemories() { return agentMemories; },
 		get projects() { return projects; },
 		get conversations() { return conversations; },
 		get messages() { return messages; },
@@ -51,10 +51,10 @@ export async function selectProject(id: string): Promise<void> {
 	if (currentProject) {
 		conversations = await ops.listConversations(id);
 		projectImages = await ops.listProjectImages(id);
-		memoryTopics = await ops.listMemoryTopics(id);
+		agentMemories = await ops.listAgentMemories(id);
 	} else {
 		projectImages = [];
-		memoryTopics = [];
+		agentMemories = [];
 	}
 }
 
@@ -65,7 +65,7 @@ export function deselectProject(): void {
 	messages = [];
 	conversations = [];
 	projectImages = [];
-	memoryTopics = [];
+	agentMemories = [];
 }
 
 export async function createNewProject(name: string): Promise<Project> {
@@ -100,7 +100,7 @@ export async function deleteCurrentProject(): Promise<void> {
 	messages = [];
 	conversations = [];
 	projectImages = [];
-	memoryTopics = [];
+	agentMemories = [];
 	await ops.deleteProject(id);
 	await loadProjects();
 }
@@ -134,9 +134,9 @@ export async function refreshMessages(): Promise<void> {
 	}
 }
 
-export async function refreshMemoryTopics(): Promise<void> {
+export async function refreshAgentMemories(): Promise<void> {
 	if (currentProject) {
-		memoryTopics = await ops.listMemoryTopics(currentProject.id);
+		agentMemories = await ops.listAgentMemories(currentProject.id);
 	}
 }
 
@@ -148,16 +148,17 @@ export async function refreshProjectImages(): Promise<void> {
 
 /**
  * Get an object URL for an image, caching it.
+ * Fetches only the blob data, not the full metadata record.
  * Returns null if the image isn't found.
  */
 export async function getImageUrl(imageId: string): Promise<string | null> {
 	const cached = imageUrlCache.get(imageId);
 	if (cached) return cached;
 
-	const image = await ops.getImage(imageId);
-	if (!image) return null;
+	const blobs = await ops.getImageBlob(imageId);
+	if (!blobs) return null;
 
-	const url = ops.imageToObjectUrl(image);
+	const url = ops.blobToObjectUrl(blobs.blob);
 	imageUrlCache.set(imageId, url);
 	return url;
 }

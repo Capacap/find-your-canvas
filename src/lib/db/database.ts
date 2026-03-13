@@ -3,17 +3,19 @@ import type {
 	Project,
 	Conversation,
 	Message,
-	StoredImage,
+	ImageMeta,
+	ImageBlob,
 	Settings,
-	MemoryTopic
+	AgentMemory
 } from '$lib/types/schema';
 
 class BananaDB extends Dexie {
 	projects!: EntityTable<Project, 'id'>;
 	conversations!: EntityTable<Conversation, 'id'>;
 	messages!: EntityTable<Message, 'id'>;
-	images!: EntityTable<StoredImage, 'id'>;
-	memoryTopics!: EntityTable<MemoryTopic, 'id'>;
+	imageMeta!: EntityTable<ImageMeta, 'id'>;
+	imageBlobs!: EntityTable<ImageBlob, 'id'>;
+	agentMemories!: EntityTable<AgentMemory, 'id'>;
 	settings!: EntityTable<Settings, 'id'>;
 
 	constructor() {
@@ -21,19 +23,12 @@ class BananaDB extends Dexie {
 
 		this.version(1).stores({
 			projects: 'id, updatedAt',
-			designDocuments: 'projectId',
 			conversations: 'id, projectId, updatedAt',
 			messages: 'id, conversationId, createdAt',
-			images: 'id, projectId, messageId',
+			imageMeta: 'id, projectId, messageId',
+			imageBlobs: 'id',
+			agentMemories: 'id, projectId, [projectId+slug]',
 			settings: 'id'
-		});
-
-		this.version(2).stores({});
-
-		// v3: replaces designDocuments with memoryTopics.
-		this.version(3).stores({
-			designDocuments: null,
-			memoryTopics: 'id, projectId, [projectId+slug]'
 		});
 	}
 }

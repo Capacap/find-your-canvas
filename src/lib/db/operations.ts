@@ -5,14 +5,16 @@
 import { db } from './database';
 import { DEFAULT_SETTINGS } from '$lib/types/schema';
 import { createThumbnail } from './thumbnail';
+import { blobToBase64 } from '$lib/engine/utils';
 import type {
 	Project,
 	Conversation,
 	Message,
-	StoredImage,
+	ImageMeta,
+	ImageBlob,
 	Settings,
 	ImageSource,
-	MemoryTopic
+	AgentMemory
 } from '$lib/types/schema';
 
 // ── Helpers ──
@@ -28,9 +30,8 @@ function now(): number {
 // ── Settings ──
 
 export async function getSettings(): Promise<Settings> {
-	const settings = await db.settings.get('app');
-	// Merge: stored API key + current defaults for model IDs.
-	return { ...DEFAULT_SETTINGS, geminiApiKey: settings?.geminiApiKey };
+	const stored = await db.settings.get('app');
+	return { ...DEFAULT_SETTINGS, ...stored, id: 'app' };
 }
 
 export async function updateSettings(patch: Partial<Omit<Settings, 'id'>>): Promise<void> {
@@ -69,7 +70,7 @@ export async function updateProject(
 }
 
 export async function deleteProject(id: string): Promise<void> {
-	await db.transaction('rw', [db.projects, db.conversations, db.messages, db.images, db.memoryTopics], async () => {
+	await db.transaction('rw', [db.projects, db.conversations, db.messages, db.imageMeta, db.imageBlobs, db.agentMemories], async () => {
 		const conversationIds = await db.conversations
 			.where('projectId')
 			.equals(id)
@@ -83,54 +84,60 @@ export async function deleteProject(id: string): Promise<void> {
 		}
 
 		await db.conversations.where('projectId').equals(id).delete();
-		await db.images.where('projectId').equals(id).delete();
-		await db.memoryTopics.where('projectId').equals(id).delete();
+
+		const imageIds = await db.imageMeta.where('projectId').equals(id).primaryKeys();
+		if (imageIds.length > 0) {
+			await db.imageBlobs.bulkDelete(imageIds);
+		}
+		await db.imageMeta.where('projectId').equals(id).delete();
+
+		await db.agentMemories.where('projectId').equals(id).delete();
 		await db.projects.delete(id);
 	});
 }
 
-// ── Memory Topics ──
+// ── Agent Memory ──
 
-export async function listMemoryTopics(projectId: string): Promise<MemoryTopic[]> {
-	return db.memoryTopics.where('projectId').equals(projectId).toArray();
+export async function listAgentMemories(projectId: string): Promise<AgentMemory[]> {
+	return db.agentMemories.where('projectId').equals(projectId).toArray();
 }
 
-export async function getMemoryTopicBySlug(projectId: string, slug: string): Promise<MemoryTopic | undefined> {
-	return db.memoryTopics.where('[projectId+slug]').equals([projectId, slug]).first();
+export async function getAgentMemoryBySlug(projectId: string, slug: string): Promise<AgentMemory | undefined> {
+	return db.agentMemories.where('[projectId+slug]').equals([projectId, slug]).first();
 }
 
 /**
- * Upsert a memory topic by [projectId, slug].
- * If content is empty, deletes the topic.
+ * Upsert an agent memory by [projectId, slug].
+ * If content is empty, deletes the entry.
  */
-export async function upsertMemoryTopic(
+export async function upsertAgentMemory(
 	projectId: string,
 	slug: string,
 	title: string,
 	summary: string,
 	content: string
 ): Promise<void> {
-	const existing = await getMemoryTopicBySlug(projectId, slug);
+	const existing = await getAgentMemoryBySlug(projectId, slug);
 	const timestamp = now();
 
 	if (!content.trim()) {
 		// Empty content = delete.
 		if (existing) {
-			await db.memoryTopics.delete(existing.id);
+			await db.agentMemories.delete(existing.id);
 		}
 		await db.projects.update(projectId, { updatedAt: timestamp });
 		return;
 	}
 
 	if (existing) {
-		await db.memoryTopics.update(existing.id, {
+		await db.agentMemories.update(existing.id, {
 			title,
 			summary,
 			content,
 			updatedAt: timestamp
 		});
 	} else {
-		const topic: MemoryTopic = {
+		const entry: AgentMemory = {
 			id: generateId(),
 			projectId,
 			slug,
@@ -140,7 +147,7 @@ export async function upsertMemoryTopic(
 			createdAt: timestamp,
 			updatedAt: timestamp
 		};
-		await db.memoryTopics.add(topic);
+		await db.agentMemories.add(entry);
 	}
 
 	await db.projects.update(projectId, { updatedAt: timestamp });
@@ -178,13 +185,7 @@ export async function updateConversation(
 }
 
 export async function deleteConversation(id: string): Promise<void> {
-	await db.transaction('rw', [db.conversations, db.messages, db.images], async () => {
-		// Find images referenced by this conversation's messages and delete them.
-		const msgs = await db.messages.where('conversationId').equals(id).toArray();
-		const imageIds = msgs.flatMap((m) => m.imageIds);
-		if (imageIds.length > 0) {
-			await db.images.bulkDelete(imageIds);
-		}
+	await db.transaction('rw', [db.conversations, db.messages], async () => {
 		await db.messages.where('conversationId').equals(id).delete();
 		await db.conversations.delete(id);
 	});
@@ -198,21 +199,22 @@ export async function addMessage(
 	text: string,
 	imageIds: string[] = []
 ): Promise<Message> {
+	const timestamp = now();
 	const message: Message = {
 		id: generateId(),
 		conversationId,
 		role,
 		text,
 		imageIds,
-		createdAt: now()
+		createdAt: timestamp
 	};
 	await db.messages.add(message);
 
 	// Touch the conversation's updatedAt.
 	const convo = await db.conversations.get(conversationId);
 	if (convo) {
-		await db.conversations.update(conversationId, { updatedAt: now() });
-		await db.projects.update(convo.projectId, { updatedAt: now() });
+		await db.conversations.update(conversationId, { updatedAt: timestamp });
+		await db.projects.update(convo.projectId, { updatedAt: timestamp });
 	}
 
 	return message;
@@ -239,15 +241,15 @@ export async function storeImage(
 		height?: number;
 		generationContext?: string;
 	} = {}
-): Promise<StoredImage> {
+): Promise<ImageMeta> {
+	const id = generateId();
 	const thumbnail = await createThumbnail(blob);
-	const image: StoredImage = {
-		id: generateId(),
+
+	const meta: ImageMeta = {
+		id,
 		projectId,
 		source: options.source ?? 'generated',
 		messageId: options.messageId,
-		blob,
-		thumbnail,
 		mimeType: options.mimeType ?? blob.type ?? 'image/png',
 		width: options.width,
 		height: options.height,
@@ -255,43 +257,44 @@ export async function storeImage(
 		generationContext: options.generationContext,
 		createdAt: now()
 	};
-	await db.images.add(image);
-	return image;
+	const blobRecord: ImageBlob = { id, blob, thumbnail };
+
+	await db.transaction('rw', [db.imageMeta, db.imageBlobs], async () => {
+		await db.imageMeta.add(meta);
+		await db.imageBlobs.add(blobRecord);
+	});
+
+	return meta;
 }
 
-export async function getImage(id: string): Promise<StoredImage | undefined> {
-	return db.images.get(id);
+/** Get image metadata only (no blobs). */
+export async function getImageMeta(id: string): Promise<ImageMeta | undefined> {
+	return db.imageMeta.get(id);
 }
 
-export async function listProjectImages(projectId: string): Promise<StoredImage[]> {
-	return db.images.where('projectId').equals(projectId).toArray();
+/** Get full image record including blobs. */
+export async function getImage(id: string): Promise<(ImageMeta & ImageBlob) | undefined> {
+	const meta = await db.imageMeta.get(id);
+	if (!meta) return undefined;
+	const blobs = await db.imageBlobs.get(id);
+	if (!blobs) return undefined;
+	return { ...meta, ...blobs };
+}
+
+/** Get just the blob data for an image. */
+export async function getImageBlob(id: string): Promise<ImageBlob | undefined> {
+	return db.imageBlobs.get(id);
+}
+
+/** List image metadata for a project (no blobs loaded). */
+export async function listProjectImages(projectId: string): Promise<ImageMeta[]> {
+	return db.imageMeta.where('projectId').equals(projectId).toArray();
 }
 
 export async function deleteImage(id: string): Promise<void> {
-	const image = await db.images.get(id);
-	if (!image) return;
-
-	await db.transaction('rw', [db.images, db.messages], async () => {
-		await db.images.delete(id);
-
-		// Clean dangling refs from any messages that reference this image.
-		const projectConvos = await db.conversations
-			.where('projectId')
-			.equals(image.projectId)
-			.primaryKeys();
-		if (projectConvos.length === 0) return;
-
-		const msgs = await db.messages
-			.where('conversationId')
-			.anyOf(projectConvos)
-			.filter((m) => m.imageIds.includes(id))
-			.toArray();
-
-		for (const msg of msgs) {
-			await db.messages.update(msg.id, {
-				imageIds: msg.imageIds.filter((imgId) => imgId !== id)
-			});
-		}
+	await db.transaction('rw', [db.imageMeta, db.imageBlobs], async () => {
+		await db.imageMeta.delete(id);
+		await db.imageBlobs.delete(id);
 	});
 }
 
@@ -299,38 +302,19 @@ export async function deleteImage(id: string): Promise<void> {
  * Create a temporary object URL for displaying an image.
  * Caller is responsible for revoking it when done.
  */
-export function imageToObjectUrl(image: StoredImage): string {
-	return URL.createObjectURL(image.blob);
+export function blobToObjectUrl(blob: Blob): string {
+	return URL.createObjectURL(blob);
 }
 
 /**
  * Get the thumbnail for an image as a base64 string.
- * Backfills the thumbnail if the image was stored before v2.
  */
 export async function getImageThumbnailBase64(imageId: string): Promise<{ base64: string; mimeType: string } | undefined> {
-	const image = await db.images.get(imageId);
-	if (!image) return undefined;
+	const blobs = await db.imageBlobs.get(imageId);
+	if (!blobs) return undefined;
 
-	// Backfill thumbnail for v1 images that don't have one.
-	if (!image.thumbnail) {
-		image.thumbnail = await createThumbnail(image.blob);
-		await db.images.update(imageId, { thumbnail: image.thumbnail });
-	}
-
-	const base64 = await blobToBase64String(image.thumbnail);
+	const base64 = await blobToBase64(blobs.thumbnail);
 	return { base64, mimeType: 'image/jpeg' };
-}
-
-function blobToBase64String(blob: Blob): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = () => {
-			const result = reader.result as string;
-			resolve(result.split(',')[1]);
-		};
-		reader.onerror = reject;
-		reader.readAsDataURL(blob);
-	});
 }
 
 // ── Bulk export/import (used by zip.ts) ──
@@ -339,8 +323,9 @@ export interface ProjectExportData {
 	project: Project;
 	conversations: Conversation[];
 	messages: Message[];
-	images: StoredImage[];
-	memoryTopics: MemoryTopic[];
+	imageMeta: ImageMeta[];
+	imageBlobs: ImageBlob[];
+	agentMemories: AgentMemory[];
 }
 
 export async function getProjectExportData(projectId: string): Promise<ProjectExportData> {
@@ -358,29 +343,36 @@ export async function getProjectExportData(projectId: string): Promise<ProjectEx
 			? await db.messages.where('conversationId').anyOf(conversationIds).toArray()
 			: [];
 
-	const images = await db.images.where('projectId').equals(projectId).toArray();
-	const memoryTopics = await db.memoryTopics.where('projectId').equals(projectId).toArray();
+	const imageMeta = await db.imageMeta.where('projectId').equals(projectId).toArray();
+	const imageIds = imageMeta.map((m) => m.id);
+	const imageBlobs = imageIds.length > 0
+		? await db.imageBlobs.where('id').anyOf(imageIds).toArray()
+		: [];
 
-	return { project, conversations, messages, images, memoryTopics };
+	const agentMemories = await db.agentMemories.where('projectId').equals(projectId).toArray();
+
+	return { project, conversations, messages, imageMeta, imageBlobs, agentMemories };
 }
 
 export async function importProjectData(data: {
 	project: Project;
 	conversations: Conversation[];
 	messages: Message[];
-	images: StoredImage[];
-	memoryTopics: MemoryTopic[];
+	imageMeta: ImageMeta[];
+	imageBlobs: ImageBlob[];
+	agentMemories: AgentMemory[];
 }): Promise<void> {
 	await db.transaction(
 		'rw',
-		[db.projects, db.conversations, db.messages, db.images, db.memoryTopics],
+		[db.projects, db.conversations, db.messages, db.imageMeta, db.imageBlobs, db.agentMemories],
 		async () => {
 			await db.projects.put(data.project);
 			await db.conversations.bulkPut(data.conversations);
 			await db.messages.bulkPut(data.messages);
-			await db.images.bulkPut(data.images);
-			if (data.memoryTopics.length > 0) {
-				await db.memoryTopics.bulkPut(data.memoryTopics);
+			await db.imageMeta.bulkPut(data.imageMeta);
+			await db.imageBlobs.bulkPut(data.imageBlobs);
+			if (data.agentMemories.length > 0) {
+				await db.agentMemories.bulkPut(data.agentMemories);
 			}
 		}
 	);

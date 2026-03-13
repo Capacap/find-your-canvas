@@ -15,7 +15,7 @@
 		renameConversation,
 		refreshMessages,
 		refreshProjectImages,
-		refreshMemoryTopics,
+		refreshAgentMemories,
 		getImageUrl,
 		revokeImageUrls,
 		exportCurrentProject,
@@ -143,7 +143,7 @@
 			textModel: TEXT_MODEL,
 			imageModel: IMAGE_MODEL,
 			projectName: app.currentProject.name,
-			memoryTopics: app.memoryTopics,
+			agentMemories: app.agentMemories,
 			projectImages: app.projectImages,
 			messages: app.messages
 		};
@@ -152,10 +152,10 @@
 			storeImage: (blob, label, opts) => ops.storeImage(projectId, blob, label, opts),
 			getImage: ops.getImage,
 			getImageThumbnail: ops.getImageThumbnailBase64,
-			getMemoryTopicBySlug: (slug) => ops.getMemoryTopicBySlug(projectId, slug),
-			listMemoryTopics: () => ops.listMemoryTopics(projectId),
-			upsertMemoryTopic: (slug, title, summary, content) =>
-				ops.upsertMemoryTopic(projectId, slug, title, summary, content)
+			getAgentMemoryBySlug: (slug) => ops.getAgentMemoryBySlug(projectId, slug),
+			listAgentMemories: () => ops.listAgentMemories(projectId),
+			upsertAgentMemory: (slug, title, summary, content) =>
+				ops.upsertAgentMemory(projectId, slug, title, summary, content)
 		};
 
 		const onEvent = (event: OrchestratorEvent) => {
@@ -174,7 +174,7 @@
 			}
 			else if (event.type === 'image_viewing') statusText = `Viewing image...`;
 			else if (event.type === 'memory_updated') {
-				refreshMemoryTopics();
+				refreshAgentMemories();
 				statusText = `Memory updated: ${event.slug}`;
 			}
 			else if (event.type === 'error') errorText = event.message;
@@ -467,10 +467,10 @@
 			{#if showMemoryPanel}
 				<aside class="side-panel">
 					<h3>Project Memory</h3>
-					{#if app.memoryTopics.length === 0}
+					{#if app.agentMemories.length === 0}
 						<p class="empty-state">No memory topics yet. The assistant will create them as your project takes shape.</p>
 					{:else}
-						{#each app.memoryTopics as topic}
+						{#each app.agentMemories as topic}
 							<details class="memory-topic">
 								<summary>
 									<span class="memory-title">{topic.title}</span>
