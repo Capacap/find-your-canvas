@@ -80,7 +80,7 @@ export interface UserAttachment {
 // ── Constants ──
 
 /** Maximum tool-call rounds before we force a stop. */
-const MAX_TOOL_ROUNDS = 5;
+const MAX_TOOL_ROUNDS = 10;
 
 // ── System prompt construction ──
 
@@ -548,6 +548,13 @@ async function runAgentTurnInner(
 
 			if (result.functionCalls.length === 0) break;
 
+			// On the final round, skip tool execution rather than executing
+			// side effects the model will never see the results of.
+			if (round === MAX_TOOL_ROUNDS - 1) {
+				onEvent({ type: 'error', message: `Agent stopped after ${MAX_TOOL_ROUNDS} rounds. Remaining tool calls were not executed.` });
+				break;
+			}
+
 			// Execute function calls and collect response parts.
 			const responseParts: Part[] = [];
 
@@ -564,13 +571,6 @@ async function runAgentTurnInner(
 			}
 
 			currentParts = responseParts;
-		}
-
-		// If the loop ended because we hit the round limit (not a break),
-		// the last round's tool results were sent but the model never responded.
-		const exhausted = currentParts.some((p) => 'functionResponse' in p);
-		if (exhausted) {
-			onEvent({ type: 'error', message: `Agent stopped after ${MAX_TOOL_ROUNDS} tool rounds. Tool results were not sent back to the model.` });
 		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
