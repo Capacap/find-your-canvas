@@ -7,8 +7,9 @@
  *   images/            - image blobs as files, keyed by image ID
  *   images/index.json  - image metadata (everything except the blob)
  */
-import JSZip from 'jszip';
-import { downloadZip } from 'client-zip';
+// Heavy zip libraries are loaded on demand — most sessions never import or export.
+const loadJSZip = () => import('jszip').then((m) => m.default);
+const loadClientZip = () => import('client-zip').then((m) => m.downloadZip);
 import { createThumbnail } from './thumbnail';
 import {
 	getProject,
@@ -106,10 +107,12 @@ export async function exportProject(projectId: string): Promise<Blob> {
 		yield { name: 'images/index.json', input: JSON.stringify(imageIndex, null, 2) };
 	}
 
+	const downloadZip = await loadClientZip();
 	return downloadZip(entries()).blob();
 }
 
 export async function importProject(zipBlob: Blob): Promise<Project> {
+	const JSZip = await loadJSZip();
 	const zip = await JSZip.loadAsync(zipBlob);
 
 	const manifestFile = zip.file('project.json');
