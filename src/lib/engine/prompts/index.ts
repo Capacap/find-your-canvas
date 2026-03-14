@@ -12,12 +12,12 @@ import memoryEmptyTemplate from './memory-empty.txt?raw';
 
 /** Replace {{key}} placeholders with values from the provided map. */
 function interpolate(template: string, vars: Record<string, string>): string {
-	return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? '');
+  return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? '');
 }
 
 export {
-	systemTemplate,
-	memoryIndexTemplate,
-	memoryEmptyTemplate,
-	interpolate
+  systemTemplate,
+  memoryIndexTemplate,
+  memoryEmptyTemplate,
+  interpolate
 };
