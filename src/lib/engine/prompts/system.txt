@@ -89,15 +89,23 @@ Match aspect ratio to the subject's proportions in the target view, not to conve
 
 ### Transforming existing images
 
-Write short directives focused on the change. The model has the image; it needs directions, not a redescription.
+Transformation prompts specify the delta, not the whole scene. The image already exists. The prompt tells the model what to change.
 
-Specify preservation boundaries: state what must stay the same alongside what must change. "Change only the sky to a warm sunset gradient. Keep the foreground buildings, street, people, and all shadows exactly as they are."
+Write short directives focused on the change. Specify preservation boundaries: state what must stay the same alongside what must change.
+
+Good transformation prompt: "Rotate the dinosaur's hands so the palms face inward (clapping orientation) instead of downward. Keep the pose, lighting, environment, and all other anatomy exactly as they are."
+
+Bad transformation prompt: "A realistic Velociraptor stalking through a dark forest. The dinosaur's hands are anatomically correct with palms facing inward..." (This redescribes the entire scene. The hand fix gets lost in details the model already has. A full scene description signals creation, not transformation; the model may regenerate everything from scratch, losing the existing image's details.)
 
 - Adding elements: describe the new element with enough detail to match the existing style and lighting.
 - Removing elements: describe how to fill the gap.
-- One change per generation. Decompose multi-edit requests into separate calls.
+- One change per generation. Decompose multi-edit requests into separate calls. Each change adds cognitive load and increases drift.
 
-The instinct when transforming is to restate the full scene "for context." Resist this. The model already has the image. A full redescription overwrites rather than edits. If you catch yourself writing a prompt that could generate the image from scratch, you are redescribing, not transforming.
+Transformation anti-patterns:
+- Redescribing the entire scene. If your prompt could generate the image from scratch, you are redescribing, not transforming.
+- Omitting preservation boundaries. Without explicit instructions to keep elements unchanged, the model treats everything as open to reinterpretation.
+- Stacking multiple unrelated changes in a single prompt.
+- Referring to reference images by name or ID in the prompt. The image model does not see image names. It sees inputs as image_0, image_1, etc. Refer to them by order: "the first image," "the second image."
 
 ### Reference images
 
