@@ -22,7 +22,7 @@
 		importProjectZip,
 		removeImage
 	} from '$lib/stores/appState.svelte';
-	import { runAgentTurn, type OrchestratorEvent, type UserAttachment, type TurnContext, type TurnActions } from '$lib/engine/orchestrator';
+	import { runAgentTurn, debugInjectFault, type OrchestratorEvent, type UserAttachment, type TurnContext, type TurnActions } from '$lib/engine/orchestrator';
 	import { TEXT_MODEL, IMAGE_MODEL } from '$lib/types/schema';
 	import * as ops from '$lib/db/operations';
 	import { marked } from 'marked';
@@ -47,6 +47,8 @@
 	let showDebug = $state(false);
 	let lightboxImageId = $state<string | null>(null);
 	let pendingFiles = $state<File[]>([]);
+	let lastFailedInput = $state('');
+	let lastFailedImageIds = $state<string[]>([]);
 	let isDragging = $state(false);
 
 	// Image URL resolution for display
@@ -104,6 +106,9 @@
 
 	async function handleSelectConversation(id: string) {
 		resolvedImageUrls = {};
+		errorText = '';
+		lastFailedInput = '';
+		lastFailedImageIds = [];
 		await selectConversation(id);
 	}
 
@@ -115,7 +120,7 @@
 		}
 	}
 
-	async function handleSend() {
+	async function handleSend(reattachImageIds: string[] = []) {
 		if ((!userInput.trim() && pendingFiles.length === 0) || isRunning) return;
 		if (!app.currentProject) return;
 
@@ -144,6 +149,10 @@
 
 		const projectId = app.currentProject.id;
 		const conversationId = app.currentConversation!.id;
+
+		// Clean up any leftover error-turn messages from previous failures.
+		await ops.deleteErrorTurnMessages(conversationId);
+		await refreshMessages();
 
 		const ctx: TurnContext = {
 			apiKey: app.settings?.geminiApiKey ?? '',
@@ -198,14 +207,9 @@
 		}));
 
 		try {
-			const result = await runAgentTurn(ctx, actions, text, onEvent, attachments);
+			const result = await runAgentTurn(ctx, actions, text, onEvent, attachments, reattachImageIds);
 
-			// Persist messages and API history from the turn result.
-			await ops.addMessage(projectId, conversationId, 'user', result.userText, result.userImageIds);
-			if (result.assistantText) {
-				await ops.addMessage(projectId, conversationId, 'assistant', result.assistantText, result.assistantImageIds);
-			}
-			await ops.updateConversationHistory(conversationId, result.apiHistory);
+			await ops.persistTurnResult(projectId, conversationId, result);
 
 			await refreshMessages();
 			await refreshProjectImages();
@@ -218,11 +222,31 @@
 					await resolveImageId(imgId);
 				}
 			}
+
+			if (result.error) {
+				errorText = `API error: ${result.error}`;
+				lastFailedInput = text;
+				lastFailedImageIds = result.userImageIds;
+			} else {
+				lastFailedInput = '';
+				lastFailedImageIds = [];
+			}
 		} catch (err) {
 			errorText = `Error: ${err instanceof Error ? err.message : String(err)}`;
 		} finally {
 			isRunning = false;
 		}
+	}
+
+	async function handleRetry() {
+		if (!lastFailedInput || !app.currentConversation || isRunning) return;
+
+		const imageIds = lastFailedImageIds;
+		userInput = lastFailedInput;
+		lastFailedInput = '';
+		lastFailedImageIds = [];
+		errorText = '';
+		await handleSend(imageIds);
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
@@ -394,6 +418,16 @@
 				<input type="checkbox" bind:checked={showDebug} />
 				Debug
 			</label>
+			{#if showDebug}
+				<button class="debug-fault-btn" onclick={() => debugInjectFault(0)}
+					title="Next turn will fail before the first API call">
+					Fault R0
+				</button>
+				<button class="debug-fault-btn" onclick={() => debugInjectFault(1)}
+					title="Next turn will fail before the second API call (after first round completes)">
+					Fault R1
+				</button>
+			{/if}
 			<button onclick={() => { showSettings = !showSettings; }}>
 				Settings
 			</button>
@@ -548,8 +582,11 @@
 					{#each app.messages as msg}
 						<!-- svelte-ignore a11y_click_events_have_key_events -->
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<div class="message {msg.role}" onclick={handleMessageClick}>
-							<div class="message-role">{msg.role === 'user' ? 'You' : 'Assistant'}</div>
+						<div class="message {msg.role}" class:error-turn={msg.errorTurn} onclick={handleMessageClick}>
+							<div class="message-role">
+								{msg.role === 'user' ? 'You' : 'Assistant'}
+								{#if msg.errorTurn}<span class="error-turn-badge">interrupted</span>{/if}
+							</div>
 							<div class="message-text">{@html renderMessageText(msg.text)}</div>
 							{#if msg.imageIds.length > 0}
 								<div class="message-images">
@@ -584,7 +621,12 @@
 					{/if}
 
 					{#if errorText}
-						<div class="status error">{errorText}</div>
+						<div class="status error">
+							{errorText}
+							{#if !isRunning}
+								<button class="retry-btn" onclick={handleRetry}>Retry</button>
+							{/if}
+						</div>
 					{/if}
 
 					{#if showDebug && debugEvents.length > 0}
@@ -666,7 +708,7 @@
 						disabled={isRunning || !app.settings?.geminiApiKey}
 						rows={3}
 					></textarea>
-					<button onclick={handleSend} disabled={isRunning || (!userInput.trim() && pendingFiles.length === 0)}>
+					<button onclick={() => handleSend()} disabled={isRunning || (!userInput.trim() && pendingFiles.length === 0)}>
 						{isRunning ? '...' : 'Send'}
 					</button>
 				</div>
@@ -1159,6 +1201,22 @@
 		background: #1a2a1a;
 	}
 
+	.message.error-turn {
+		opacity: 0.6;
+	}
+
+	.message.error-turn .message-text {
+		border-left: 3px solid #e55;
+	}
+
+	.error-turn-badge {
+		color: #e55;
+		font-size: 0.65rem;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		margin-left: 0.4rem;
+	}
+
 	.thought-text {
 		background: #1a1a22;
 		color: #8888bb;
@@ -1205,6 +1263,26 @@
 
 	.status.error {
 		color: #e55;
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.retry-btn {
+		background: #2a1515;
+		color: #e55;
+		border: 1px solid #e55;
+		padding: 0.25rem 0.75rem;
+		border-radius: 4px;
+		font-size: 0.8rem;
+		cursor: pointer;
+		flex-shrink: 0;
+	}
+
+	.retry-btn:hover {
+		background: #3a1a1a;
+		color: #ff7777;
+		border-color: #ff7777;
 	}
 
 	.chat.dragging {
@@ -1390,6 +1468,18 @@
 
 	.debug-toggle input {
 		accent-color: #f5c542;
+	}
+
+	.debug-fault-btn {
+		background: #2a1515;
+		color: #e55;
+		border-color: #e55;
+		font-size: 0.75rem;
+		padding: 0.25rem 0.5rem;
+	}
+
+	.debug-fault-btn:hover:not(:disabled) {
+		background: #3a1a1a;
 	}
 
 	/* Debug log */

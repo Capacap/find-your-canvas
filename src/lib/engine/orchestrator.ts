@@ -73,6 +73,8 @@ export interface TurnResult {
 	assistantImageIds: string[];
 	/** Updated Gemini history including this turn, for storage on the conversation. */
 	apiHistory: Content[];
+	/** If set, the turn ended due to an error. Partial results above should still be persisted. */
+	error?: string;
 }
 
 export interface UserAttachment {
@@ -84,6 +86,18 @@ export interface UserAttachment {
 
 /** Maximum tool-call rounds before we force a stop. */
 const MAX_TOOL_ROUNDS = 10;
+
+/**
+ * Debug fault injection. When set to a round number (0-indexed), the
+ * orchestrator throws a simulated error at the start of that round.
+ * Resets to null after firing.
+ */
+let _debugFaultRound: number | null = null;
+
+export function debugInjectFault(round: number): void {
+	if (!import.meta.env.DEV) return;
+	_debugFaultRound = round;
+}
 
 // ── System prompt construction ──
 
@@ -456,7 +470,8 @@ export async function runAgentTurn(
 	actions: TurnActions,
 	userText: string,
 	onEvent: EventCallback,
-	attachments: UserAttachment[] = []
+	attachments: UserAttachment[] = [],
+	reattachImageIds: string[] = []
 ): Promise<TurnResult> {
 	if (turnInProgress) {
 		onEvent({ type: 'error', message: 'A turn is already in progress.' });
@@ -465,7 +480,7 @@ export async function runAgentTurn(
 	turnInProgress = true;
 
 	try {
-		return await runAgentTurnInner(ctx, actions, userText, onEvent, attachments);
+		return await runAgentTurnInner(ctx, actions, userText, onEvent, attachments, reattachImageIds);
 	} finally {
 		turnInProgress = false;
 	}
@@ -476,7 +491,8 @@ async function runAgentTurnInner(
 	actions: TurnActions,
 	userText: string,
 	onEvent: EventCallback,
-	attachments: UserAttachment[]
+	attachments: UserAttachment[],
+	reattachImageIds: string[]
 ): Promise<TurnResult> {
 	if (!ctx.apiKey) {
 		onEvent({ type: 'error', message: 'No API key configured. Add your Gemini API key in settings.' });
@@ -492,15 +508,33 @@ async function runAgentTurnInner(
 		thinkingConfig: { includeThoughts: true, thinkingLevel: ThinkingLevel.LOW }
 	};
 
-	const { ids: userImageIds, parts: userImageParts } = await processAttachments(attachments, actions);
-
 	let apiHistory = ctx.apiHistory;
-	let currentParts: Part[] = [{ text: userText }, ...userImageParts];
 	let accumulatedText = '';
 	const generatedImageIds: string[] = [];
+	let userImageIds: string[] = [];
 
 	try {
+		const attachmentResult = await processAttachments(attachments, actions);
+		userImageIds = attachmentResult.ids;
+
+		// Re-attach images from a previous failed turn (already stored, just need inline data).
+		const reattachParts: Part[] = [];
+		for (const imageId of reattachImageIds) {
+			const img = await actions.getImage(imageId);
+			if (img) {
+				const base64 = await blobToBase64(img.blob);
+				reattachParts.push({ inlineData: { data: base64, mimeType: img.mimeType } });
+				userImageIds.push(imageId);
+			}
+		}
+
+		let currentParts: Part[] = [{ text: userText }, ...attachmentResult.parts, ...reattachParts];
 		for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+			if (_debugFaultRound !== null && round === _debugFaultRound) {
+				_debugFaultRound = null;
+				throw new Error(`[simulated] Fault injected on round ${round}`);
+			}
+
 			onEvent({ type: 'status', text: round === 0 ? 'Thinking...' : 'Processing tool results...' });
 			onEvent({ type: 'debug_request', round, parts: redactParts(currentParts), historyLength: apiHistory.length });
 
@@ -568,8 +602,21 @@ async function runAgentTurnInner(
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		onEvent({ type: 'error', message: `API error: ${msg}` });
-		onEvent({ type: 'done', assistantText: '', imageIds: [] });
-		return { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [], apiHistory: ctx.apiHistory };
+
+		const partialAssistantText = appendImageRefs(accumulatedText, generatedImageIds);
+		onEvent({ type: 'done', assistantText: partialAssistantText, imageIds: generatedImageIds });
+
+		return {
+			userText: appendImageRefs(userText, userImageIds),
+			userImageIds,
+			assistantText: partialAssistantText,
+			assistantImageIds: generatedImageIds,
+			// Always roll back to pre-turn history. Intermediate states contain
+			// dangling function calls (no tool responses) that the SDK's history
+			// curation can't fix, and that corrupt all subsequent turns.
+			apiHistory: ctx.apiHistory,
+			error: msg
+		};
 	}
 
 	const finalAssistantText = appendImageRefs(accumulatedText, generatedImageIds);

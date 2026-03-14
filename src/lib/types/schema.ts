@@ -53,6 +53,10 @@ export interface ChatMessage {
 	text: string;
 	/** IDs of images generated or attached in this message. */
 	imageIds: string[];
+	/** If true, this message belongs to a turn that ended in error.
+	 *  The model may not have full context of these messages.
+	 *  Error-turn messages are deleted when the next turn begins. */
+	errorTurn?: boolean;
 	createdAt: number;
 }
 

@@ -216,7 +216,8 @@ export async function addMessage(
 	conversationId: string,
 	role: ChatMessage['role'],
 	text: string,
-	imageIds: string[] = []
+	imageIds: string[] = [],
+	options: { errorTurn?: boolean } = {}
 ): Promise<ChatMessage> {
 	const timestamp = now();
 	const message: ChatMessage = {
@@ -225,6 +226,7 @@ export async function addMessage(
 		role,
 		text,
 		imageIds,
+		...(options.errorTurn ? { errorTurn: true } : {}),
 		createdAt: timestamp
 	};
 	await db.transaction('rw', [db.messages, db.conversations, db.projects], async () => {
@@ -241,6 +243,62 @@ export async function listMessages(conversationId: string): Promise<ChatMessage[
 		.where('conversationId')
 		.equals(conversationId)
 		.sortBy('createdAt');
+}
+
+/**
+ * Persist the result of an agent turn atomically: user message, assistant
+ * message, and updated apiHistory in a single transaction.
+ */
+export async function persistTurnResult(
+	projectId: string,
+	conversationId: string,
+	result: {
+		userText: string;
+		userImageIds: string[];
+		assistantText: string;
+		assistantImageIds: string[];
+		apiHistory: Conversation['apiHistory'];
+		error?: string;
+	}
+): Promise<void> {
+	const isError = !!result.error;
+	const timestamp = now();
+
+	await db.transaction('rw', [db.messages, db.conversations, db.projects], async () => {
+		if (result.userText) {
+			await db.messages.add({
+				id: generateId(),
+				conversationId,
+				role: 'user',
+				text: result.userText,
+				imageIds: result.userImageIds,
+				...(isError ? { errorTurn: true } : {}),
+				createdAt: timestamp
+			});
+		}
+		if (result.assistantText) {
+			await db.messages.add({
+				id: generateId(),
+				conversationId,
+				role: 'assistant',
+				text: result.assistantText,
+				imageIds: result.assistantImageIds,
+				...(isError ? { errorTurn: true } : {}),
+				createdAt: timestamp + 1
+			});
+		}
+		await db.conversations.update(conversationId, { apiHistory: result.apiHistory, updatedAt: timestamp });
+		await db.projects.update(projectId, { updatedAt: timestamp });
+	});
+}
+
+/** Delete all messages from a failed turn. Called at the start of the next turn. */
+export async function deleteErrorTurnMessages(conversationId: string): Promise<void> {
+	await db.messages
+		.where('conversationId')
+		.equals(conversationId)
+		.filter((m) => m.errorTurn === true)
+		.delete();
 }
 
 // ── Images ──
@@ -355,7 +413,8 @@ export async function getProjectExportData(projectId: string): Promise<ProjectEx
 	const conversationIds = conversations.map((c) => c.id);
 	const messages =
 		conversationIds.length > 0
-			? await db.messages.where('conversationId').anyOf(conversationIds).toArray()
+			? (await db.messages.where('conversationId').anyOf(conversationIds).toArray())
+				.filter((m) => !m.errorTurn)
 			: [];
 
 	const imageMeta = await db.imageMeta.where('projectId').equals(projectId).toArray();
