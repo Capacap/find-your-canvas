@@ -32,6 +32,7 @@ let errorText = $state('');
 let debugEvents = $state<OrchestratorEvent[]>([]);
 let retryInput = $state('');
 let retryImageIds = $state<string[]>([]);
+let abortController: AbortController | null = null;
 
 export function getTurnState() {
 	return {
@@ -51,6 +52,14 @@ export function clearTurnError(): void {
 	errorText = '';
 	retryInput = '';
 	retryImageIds = [];
+}
+
+/** Cancel the currently running turn, if any. */
+export function cancelTurn(): void {
+	if (abortController) {
+		abortController.abort();
+		abortController = null;
+	}
 }
 
 // ── Turn execution ──
@@ -77,6 +86,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
 	const projectId = app.currentProject.id;
 	const conversationId = app.currentConversation.id;
 
+	abortController = new AbortController();
 	isRunning = true;
 	debugEvents = [];
 	streamingText = '';
@@ -95,7 +105,8 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
 		projectName: app.currentProject.name,
 		agentMemories: $state.snapshot(app.agentMemories),
 		projectImages: $state.snapshot(app.projectImages),
-		apiHistory: $state.snapshot(app.currentConversation.apiHistory ?? [])
+		apiHistory: $state.snapshot(app.currentConversation.apiHistory ?? []),
+		signal: abortController.signal
 	};
 
 	const actions: TurnActions = {
@@ -151,9 +162,12 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
 		streamingThought = '';
 
 		if (result.error) {
-			errorText = `API error: ${result.error}`;
-			retryInput = opts.text;
-			retryImageIds = result.userImageIds;
+			const cancelled = result.error === 'Turn cancelled';
+			errorText = cancelled ? 'Turn cancelled.' : `API error: ${result.error}`;
+			if (!cancelled) {
+				retryInput = opts.text;
+				retryImageIds = result.userImageIds;
+			}
 		} else {
 			retryInput = '';
 			retryImageIds = [];
@@ -161,6 +175,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
 	} catch (err) {
 		errorText = `Error: ${err instanceof Error ? err.message : String(err)}`;
 	} finally {
+		abortController = null;
 		isRunning = false;
 	}
 

@@ -53,6 +53,8 @@ export interface TurnContext {
 	projectImages: ImageMeta[];
 	/** Raw Gemini history from the conversation, passed directly to the API. */
 	apiHistory: Content[];
+	/** Signal to abort the turn. Checked between rounds and passed to API calls. */
+	signal?: AbortSignal;
 }
 
 /** Side effects the orchestrator can perform during tool execution. */
@@ -338,7 +340,8 @@ async function handleGenerateImage(
 
 		const imageResponse = await generateImage(ctx.apiKey, ctx.imageModel, prompt, {
 			aspectRatio,
-			inputImages: inputImages.length > 0 ? inputImages : undefined
+			inputImages: inputImages.length > 0 ? inputImages : undefined,
+			signal: ctx.signal
 		});
 		const blob = await base64ToBlob(imageResponse.imageData, imageResponse.mimeType);
 		const stored = await actions.createImage(blob, label, { generationContext: prompt });
@@ -550,12 +553,15 @@ async function runAgentTurnInner(
 			onEvent({ type: 'status', text: round === 0 ? 'Thinking...' : 'Processing tool results...' });
 			onEvent({ type: 'debug_request', round, parts: redactParts(currentParts), historyLength: apiHistory.length });
 
+			if (ctx.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
+
 			const { stream, getResult } = await sendMessageStreaming(
 				ctx.apiKey,
 				ctx.textModel,
 				currentParts,
 				apiHistory,
-				config
+				config,
+				ctx.signal
 			);
 
 			let roundText = '';
@@ -598,6 +604,8 @@ async function runAgentTurnInner(
 			const responseParts: Part[] = [];
 
 			for (const call of result.functionCalls) {
+				if (ctx.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
+
 				const callArgs = (call.args ?? {}) as Record<string, unknown>;
 				onEvent({ type: 'debug_tool_exec', name: call.name ?? 'unknown', args: callArgs });
 
@@ -612,8 +620,9 @@ async function runAgentTurnInner(
 			currentParts = responseParts;
 		}
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err);
-		onEvent({ type: 'error', message: `API error: ${msg}` });
+		const cancelled = err instanceof DOMException && err.name === 'AbortError';
+		const msg = cancelled ? 'Turn cancelled' : (err instanceof Error ? err.message : String(err));
+		onEvent({ type: 'error', message: cancelled ? msg : `API error: ${msg}` });
 
 		const partialAssistantText = appendImageRefs(accumulatedText, generatedImageIds);
 		onEvent({ type: 'done', assistantText: partialAssistantText, imageIds: generatedImageIds });

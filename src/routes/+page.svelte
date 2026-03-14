@@ -19,7 +19,7 @@
 		importProject,
 		deleteImage
 	} from '$lib/stores/appState.svelte';
-	import { getTurnState, sendMessage, retryMessage, clearTurnError } from '$lib/stores/turnState.svelte';
+	import { getTurnState, sendMessage, retryMessage, clearTurnError, cancelTurn } from '$lib/stores/turnState.svelte';
 	import { debugInjectFault } from '$lib/engine/orchestrator';
 	import { marked } from 'marked';
 
@@ -522,7 +522,7 @@
 					{#if turn.errorText}
 						<div class="status error">
 							{turn.errorText}
-							{#if !turn.isRunning}
+							{#if !turn.isRunning && turn.retryInput}
 								<button class="retry-btn" onclick={handleRetry}>Retry</button>
 							{/if}
 						</div>
@@ -607,9 +607,11 @@
 						disabled={turn.isRunning || !app.settings?.geminiApiKey}
 						rows={3}
 					></textarea>
-					<button onclick={() => handleSend()} disabled={turn.isRunning || (!userInput.trim() && pendingFiles.length === 0)}>
-						{turn.isRunning ? '...' : 'Send'}
-					</button>
+					{#if turn.isRunning}
+						<button class="cancel-btn" onclick={cancelTurn}>Cancel</button>
+					{:else}
+						<button onclick={() => handleSend()} disabled={!userInput.trim() && pendingFiles.length === 0}>Send</button>
+					{/if}
 				</div>
 			</main>
 		</div>
@@ -1285,6 +1287,15 @@
 
 	.input-area button:hover:not(:disabled) {
 		background: #f0b820;
+	}
+
+	.input-area .cancel-btn {
+		background: #e55;
+		color: #fff;
+	}
+
+	.input-area .cancel-btn:hover {
+		background: #ff4444;
 	}
 
 	/* Lightbox */

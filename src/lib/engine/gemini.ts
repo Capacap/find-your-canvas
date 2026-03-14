@@ -62,7 +62,8 @@ export async function sendMessageStreaming(
 	modelId: string,
 	messageParts: Part[],
 	history: Content[] = [],
-	config?: GenerateContentConfig
+	config?: GenerateContentConfig,
+	signal?: AbortSignal
 ): Promise<{
 	stream: AsyncGenerator<StreamChunk>;
 	getResult: () => ApiTurnResult;
@@ -71,7 +72,7 @@ export async function sendMessageStreaming(
 	const chat: Chat = client.chats.create({
 		model: modelId,
 		history,
-		config
+		config: signal ? { ...config, abortSignal: signal } : config
 	});
 
 	const responseStream = await chat.sendMessageStream({ message: messageParts });
@@ -134,6 +135,7 @@ export async function generateImage(
 	options: {
 		inputImages?: Array<{ data: string; mimeType: string }>;
 		aspectRatio?: string;
+		signal?: AbortSignal;
 	} = {}
 ): Promise<GeminiImageResponse> {
 	const client = getClient(apiKey);
@@ -141,6 +143,9 @@ export async function generateImage(
 	const config: GenerateContentConfig = {};
 	if (options.aspectRatio) {
 		config.imageConfig = { aspectRatio: options.aspectRatio };
+	}
+	if (options.signal) {
+		config.abortSignal = options.signal;
 	}
 
 	const chat: Chat = client.chats.create({
