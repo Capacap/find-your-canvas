@@ -1,7 +1,7 @@
 /**
  * Gemini API client wrapper.
  *
- * Rules (from claude_banana experience):
+ * Rules:
  * - Always use chats.create() + chat.sendMessage(), never models.generateContent()
  * - Don't set responseModalities; image models return images by default
  * - Input MIME types: png, jpeg, webp, heic, heif (no gif)
@@ -16,6 +16,7 @@ import {
 } from '@google/genai';
 
 // ── Client singleton ──
+// Single key assumed; swapping keys replaces the client.
 
 let clientInstance: GoogleGenAI | null = null;
 let currentApiKey: string | null = null;
@@ -29,7 +30,7 @@ function getClient(apiKey: string): GoogleGenAI {
 
 // ── Exported types ──
 
-export interface ParsedTextResponse {
+export interface ApiTurnResult {
 	text: string;
 	functionCalls: FunctionCall[];
 	history: Content[];
@@ -59,12 +60,12 @@ export interface GeminiImageResponse {
 export async function sendMessageStreaming(
 	apiKey: string,
 	modelId: string,
-	userParts: Part[],
+	messageParts: Part[],
 	history: Content[] = [],
 	config?: GenerateContentConfig
 ): Promise<{
 	stream: AsyncGenerator<StreamChunk>;
-	getResult: () => ParsedTextResponse;
+	getResult: () => ApiTurnResult;
 }> {
 	const client = getClient(apiKey);
 	const chat: Chat = client.chats.create({
@@ -73,7 +74,7 @@ export async function sendMessageStreaming(
 		config
 	});
 
-	const responseStream = await chat.sendMessageStream({ message: userParts });
+	const responseStream = await chat.sendMessageStream({ message: messageParts });
 
 	let fullText = '';
 	const allFunctionCalls: FunctionCall[] = [];
@@ -106,13 +107,14 @@ export async function sendMessageStreaming(
 		consumed = true;
 	}
 
-	function getResult(): ParsedTextResponse {
+	function getResult(): ApiTurnResult {
 		if (!consumed) {
 			throw new Error('Stream must be fully consumed before calling getResult()');
 		}
 		return {
 			text: fullText,
 			functionCalls: allFunctionCalls,
+			// true = curated history (role alternation enforced, thought signatures preserved).
 			history: chat.getHistory(true)
 		};
 	}

@@ -25,3 +25,11 @@ export async function base64ToBlob(base64: string, mimeType: string): Promise<Bl
 	const res = await fetch(`data:${mimeType};base64,${base64}`);
 	return res.blob();
 }
+
+/**
+ * Create a temporary object URL for displaying an image.
+ * Caller is responsible for revoking it when done.
+ */
+export function blobToObjectUrl(blob: Blob): string {
+	return URL.createObjectURL(blob);
+}

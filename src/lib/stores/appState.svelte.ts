@@ -3,7 +3,8 @@
  */
 import type { Project, Conversation, ChatMessage, ImageMeta, Settings, AgentMemory } from '$lib/types/schema';
 import * as ops from '$lib/db/operations';
-import { downloadProjectZip, importProject } from '$lib/db/zip';
+import { blobToObjectUrl } from '$lib/utils';
+import { downloadProjectZip, importProject as importProjectZip } from '$lib/db/zip';
 
 // Current state
 let currentProject = $state<Project | null>(null);
@@ -57,7 +58,7 @@ export async function selectProject(id: string): Promise<void> {
 	agentMemories = [];
 	if (currentProject) {
 		conversations = await ops.listConversations(id);
-		projectImages = await ops.listProjectImages(id);
+		projectImages = await ops.listImages(id);
 		agentMemories = await ops.listAgentMemories(id);
 	}
 }
@@ -72,7 +73,7 @@ export function deselectProject(): void {
 	agentMemories = [];
 }
 
-export async function createNewProject(name: string): Promise<Project> {
+export async function createProject(name: string): Promise<Project> {
 	const project = await ops.createProject(name);
 	await loadProjects();
 	await selectProject(project.id);
@@ -87,7 +88,7 @@ export async function selectConversation(id: string): Promise<void> {
 	}
 }
 
-export async function createNewConversation(title: string): Promise<Conversation> {
+export async function createConversation(title: string): Promise<Conversation> {
 	if (!currentProject) throw new Error('No project selected');
 	const convo = await ops.createConversation(currentProject.id, title);
 	conversations = await ops.listConversations(currentProject.id);
@@ -95,7 +96,7 @@ export async function createNewConversation(title: string): Promise<Conversation
 	return convo;
 }
 
-export async function deleteCurrentProject(): Promise<void> {
+export async function deleteProject(): Promise<void> {
 	if (!currentProject) return;
 	const id = currentProject.id;
 	revokeImageUrls();
@@ -109,7 +110,7 @@ export async function deleteCurrentProject(): Promise<void> {
 	await loadProjects();
 }
 
-export async function removeConversation(id: string): Promise<void> {
+export async function deleteConversation(id: string): Promise<void> {
 	if (!currentProject) return;
 	await ops.deleteConversation(id);
 	conversations = await ops.listConversations(currentProject.id);
@@ -128,10 +129,6 @@ export async function renameConversation(id: string, title: string): Promise<voi
 	}
 }
 
-export function appendMessage(msg: ChatMessage): void {
-	messages = [...messages, msg];
-}
-
 export async function refreshMessages(): Promise<void> {
 	if (currentConversation) {
 		messages = await ops.listMessages(currentConversation.id);
@@ -146,7 +143,7 @@ export async function refreshAgentMemories(): Promise<void> {
 
 export async function refreshProjectImages(): Promise<void> {
 	if (currentProject) {
-		projectImages = await ops.listProjectImages(currentProject.id);
+		projectImages = await ops.listImages(currentProject.id);
 	}
 }
 
@@ -172,7 +169,7 @@ export async function getImageUrl(imageId: string): Promise<string | null> {
 		const blobs = await ops.getImageBlob(imageId);
 		if (!blobs) return null;
 
-		const url = ops.blobToObjectUrl(blobs.blob);
+		const url = blobToObjectUrl(blobs.blob);
 
 		// Evict oldest entries if at capacity.
 		while (imageUrlCache.size >= IMAGE_URL_CACHE_MAX) {
@@ -193,21 +190,21 @@ export async function getImageUrl(imageId: string): Promise<string | null> {
 	}
 }
 
-export async function removeImage(imageId: string): Promise<void> {
+export async function deleteImage(imageId: string): Promise<void> {
 	await ops.deleteImage(imageId);
 	revokeImageUrls();
 	if (currentProject) {
-		projectImages = await ops.listProjectImages(currentProject.id);
+		projectImages = await ops.listImages(currentProject.id);
 	}
 }
 
-export async function exportCurrentProject(): Promise<void> {
+export async function exportProject(): Promise<void> {
 	if (!currentProject) return;
 	await downloadProjectZip(currentProject.id);
 }
 
-export async function importProjectZip(zipBlob: Blob): Promise<Project> {
-	const project = await importProject(zipBlob);
+export async function importProject(zipBlob: Blob): Promise<Project> {
+	const project = await importProjectZip(zipBlob);
 	await loadProjects();
 	await selectProject(project.id);
 	return project;

@@ -1,0 +1,181 @@
+/**
+ * Reactive turn state and execution logic.
+ *
+ * Bridges the orchestration engine with the app store and database layer,
+ * keeping the page component free of engine wiring. Owns all state related
+ * to a running or recently-completed agent turn: streaming output, status,
+ * errors, debug events, and retry context.
+ */
+import {
+	getAppState,
+	refreshMessages,
+	refreshProjectImages,
+	refreshAgentMemories
+} from './appState.svelte';
+import {
+	runAgentTurn,
+	type OrchestratorEvent,
+	type UserAttachment,
+	type TurnContext,
+	type TurnActions
+} from '$lib/engine/orchestrator';
+import { TEXT_MODEL, IMAGE_MODEL } from '$lib/types/schema';
+import * as ops from '$lib/db/operations';
+
+// ── Reactive turn state ──
+
+let isRunning = $state(false);
+let streamingText = $state('');
+let streamingThought = $state('');
+let statusText = $state('');
+let errorText = $state('');
+let debugEvents = $state<OrchestratorEvent[]>([]);
+let retryInput = $state('');
+let retryImageIds = $state<string[]>([]);
+
+export function getTurnState() {
+	return {
+		get isRunning() { return isRunning; },
+		get streamingText() { return streamingText; },
+		get streamingThought() { return streamingThought; },
+		get statusText() { return statusText; },
+		get errorText() { return errorText; },
+		get debugEvents() { return debugEvents; },
+		get retryInput() { return retryInput; },
+		get retryImageIds() { return retryImageIds; }
+	};
+}
+
+/** Reset error and retry state (e.g. on conversation switch). */
+export function clearTurnError(): void {
+	errorText = '';
+	retryInput = '';
+	retryImageIds = [];
+}
+
+// ── Turn execution ──
+
+export interface SendOptions {
+	text: string;
+	files?: File[];
+	reattachImageIds?: string[];
+	/** Called when a new image is generated mid-turn, so the UI can resolve its URL. */
+	onImageGenerated?: (imageId: string) => void;
+}
+
+/**
+ * Execute an agent turn. Builds context from current app state,
+ * runs the orchestrator, and persists results atomically.
+ *
+ * Returns false if the turn couldn't start (already running, missing project/conversation).
+ */
+export async function sendMessage(opts: SendOptions): Promise<boolean> {
+	const app = getAppState();
+	if (isRunning) return false;
+	if (!app.currentProject || !app.currentConversation) return false;
+
+	const projectId = app.currentProject.id;
+	const conversationId = app.currentConversation.id;
+
+	isRunning = true;
+	debugEvents = [];
+	streamingText = '';
+	streamingThought = '';
+	statusText = 'Thinking...';
+	errorText = '';
+
+	// Clean up any leftover error-turn messages from previous failures.
+	await ops.deleteErrorMessages(conversationId);
+	await refreshMessages();
+
+	const ctx: TurnContext = {
+		apiKey: app.settings?.geminiApiKey ?? '',
+		textModel: TEXT_MODEL,
+		imageModel: IMAGE_MODEL,
+		projectName: app.currentProject.name,
+		agentMemories: $state.snapshot(app.agentMemories),
+		projectImages: $state.snapshot(app.projectImages),
+		apiHistory: $state.snapshot(app.currentConversation.apiHistory ?? [])
+	};
+
+	const actions: TurnActions = {
+		createImage: (blob, label, actionOpts) => ops.createImage(projectId, blob, label, actionOpts),
+		getImage: ops.getImage,
+		getImageThumbnail: ops.getImageThumbnail,
+		getAgentMemory: (slug) => ops.getAgentMemory(projectId, slug),
+		listAgentMemories: () => ops.listAgentMemories(projectId),
+		upsertAgentMemory: (slug, title, summary, content) =>
+			ops.upsertAgentMemory(projectId, slug, title, summary, content)
+	};
+
+	const onEvent = (event: OrchestratorEvent) => {
+		if (event.type.startsWith('debug_')) {
+			debugEvents = [...debugEvents, event];
+		}
+
+		if (event.type === 'text_delta') {
+			streamingText += event.text;
+			statusText = '';
+		} else if (event.type === 'thought_delta') {
+			streamingThought += event.text;
+		} else if (event.type === 'status') statusText = event.text;
+		else if (event.type === 'image_generating') statusText = `Generating: ${event.label}...`;
+		else if (event.type === 'image_complete') {
+			opts.onImageGenerated?.(event.imageId);
+			statusText = `Generated: ${event.label}`;
+		}
+		else if (event.type === 'image_viewing') statusText = 'Viewing image...';
+		else if (event.type === 'memory_updated') {
+			refreshAgentMemories();
+			statusText = `Memory updated: ${event.slug}`;
+		}
+		else if (event.type === 'error') errorText = event.message;
+		else if (event.type === 'done') {
+			statusText = '';
+		}
+	};
+
+	const attachments: UserAttachment[] = (opts.files ?? []).map((f) => ({
+		blob: f,
+		label: f.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ')
+	}));
+
+	try {
+		const result = await runAgentTurn(ctx, actions, opts.text, onEvent, attachments, opts.reattachImageIds ?? []);
+
+		await ops.saveTurnResult(projectId, conversationId, result);
+
+		await refreshMessages();
+		await refreshProjectImages();
+		streamingText = '';
+		streamingThought = '';
+
+		if (result.error) {
+			errorText = `API error: ${result.error}`;
+			retryInput = opts.text;
+			retryImageIds = result.userImageIds;
+		} else {
+			retryInput = '';
+			retryImageIds = [];
+		}
+	} catch (err) {
+		errorText = `Error: ${err instanceof Error ? err.message : String(err)}`;
+	} finally {
+		isRunning = false;
+	}
+
+	return true;
+}
+
+/** Retry the last failed turn, re-attaching any images from that turn. */
+export async function retryMessage(onImageGenerated?: (imageId: string) => void): Promise<boolean> {
+	if (!retryInput || isRunning) return false;
+
+	const text = retryInput;
+	const imageIds = retryImageIds;
+	retryInput = '';
+	retryImageIds = [];
+	errorText = '';
+
+	return sendMessage({ text, reattachImageIds: imageIds, onImageGenerated });
+}

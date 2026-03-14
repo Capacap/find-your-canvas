@@ -39,8 +39,6 @@ export interface Conversation {
 	updatedAt: number;
 }
 
-export type ChatMessageRole = 'user' | 'assistant';
-
 /**
  * UI-facing record for a single chat message. Stores human-readable text
  * with [image:id] references resolved at render time. Not used for API
@@ -49,7 +47,7 @@ export type ChatMessageRole = 'user' | 'assistant';
 export interface ChatMessage {
 	id: string;
 	conversationId: string;
-	role: ChatMessageRole;
+	role: 'user' | 'assistant';
 	text: string;
 	/** IDs of images generated or attached in this message. */
 	imageIds: string[];

@@ -7,53 +7,57 @@
 		loadProjects,
 		selectProject,
 		deselectProject,
-		createNewProject,
+		createProject,
 		selectConversation,
-		createNewConversation,
-		deleteCurrentProject,
-		removeConversation,
+		createConversation,
+		deleteProject,
+		deleteConversation,
 		renameConversation,
-		refreshMessages,
-		refreshProjectImages,
-		refreshAgentMemories,
 		getImageUrl,
 		revokeImageUrls,
-		exportCurrentProject,
-		importProjectZip,
-		removeImage
+		exportProject,
+		importProject,
+		deleteImage
 	} from '$lib/stores/appState.svelte';
-	import { runAgentTurn, debugInjectFault, type OrchestratorEvent, type UserAttachment, type TurnContext, type TurnActions } from '$lib/engine/orchestrator';
-	import { TEXT_MODEL, IMAGE_MODEL } from '$lib/types/schema';
-	import * as ops from '$lib/db/operations';
+	import { getTurnState, sendMessage, retryMessage, clearTurnError } from '$lib/stores/turnState.svelte';
+	import { debugInjectFault } from '$lib/engine/orchestrator';
 	import { marked } from 'marked';
 
-	// Configure marked for safe inline rendering.
 	marked.setOptions({ breaks: true, gfm: true });
 
-	const app = getAppState();
+	// ── State ──
 
+	const app = getAppState();
+	const turn = getTurnState();
+
+	// Form inputs
 	let userInput = $state('');
-	let statusText = $state('');
-	let errorText = $state('');
-	let isRunning = $state(false);
-	let showSettings = $state(false);
 	let apiKeyInput = $state('');
 	let newProjectName = $state('');
-	let debugEvents = $state<OrchestratorEvent[]>([]);
-	let streamingText = $state('');
-	let streamingThought = $state('');
+
+	// Panel toggles
+	let showSettings = $state(false);
 	let showMemoryPanel = $state(false);
 	let showImageGallery = $state(false);
 	let showDebug = $state(false);
 	let lightboxImageId = $state<string | null>(null);
-	let pendingFiles = $state<File[]>([]);
-	let lastFailedInput = $state('');
-	let lastFailedImageIds = $state<string[]>([]);
-	let isDragging = $state(false);
-
-	// Image URL resolution for display
-	let resolvedImageUrls = $state<Record<string, string>>({});
 	let lightboxImage = $derived(app.projectImages.find((img) => img.id === lightboxImageId));
+
+	// File attachments
+	const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
+	let pendingFiles = $state<File[]>([]);
+	let pendingFileUrls = $state<Map<File, string>>(new Map());
+	let isDragging = $state(false);
+	let attachInput = $state<HTMLInputElement>(null!);
+	let importFileInput = $state<HTMLInputElement>(null!);
+
+	// Image URL resolution: reactive projection of the store's LRU cache.
+	let resolvedImageUrls = $state<Record<string, string>>({});
+
+	// Page-level status for import/export (turn status lives in turnState).
+	let pageStatus = $state('');
+
+	// ── Lifecycle ──
 
 	onMount(async () => {
 		await loadSettings();
@@ -61,56 +65,21 @@
 		apiKeyInput = app.settings?.geminiApiKey ?? '';
 	});
 
-	// Resolve image URLs whenever messages change (including on reload/navigation).
+	// Resolve image URLs whenever messages or project images change.
 	$effect(() => {
-		const msgs = app.messages;
 		const imageRefPattern = /\[image:([^\]]+)\]/g;
-		for (const msg of msgs) {
-			for (const imgId of msg.imageIds) {
-				resolveImageId(imgId);
-			}
+		for (const msg of app.messages) {
+			for (const imgId of msg.imageIds) resolveImageId(imgId);
 			let match;
-			while ((match = imageRefPattern.exec(msg.text)) !== null) {
-				resolveImageId(match[1]);
-			}
+			while ((match = imageRefPattern.exec(msg.text)) !== null) resolveImageId(match[1]);
 		}
 	});
 
-	// Resolve image URLs for project images when they change.
 	$effect(() => {
-		for (const img of app.projectImages) {
-			resolveImageId(img.id);
-		}
+		for (const img of app.projectImages) resolveImageId(img.id);
 	});
 
-	async function handleSaveSettings() {
-		await saveSettings({ geminiApiKey: apiKeyInput });
-		showSettings = false;
-	}
-
-	async function handleCreateProject() {
-		if (!newProjectName.trim()) return;
-		await createNewProject(newProjectName.trim());
-		newProjectName = '';
-	}
-
-	async function handleSelectProject(id: string) {
-		revokeImageUrls();
-		resolvedImageUrls = {};
-		await selectProject(id);
-	}
-
-	async function handleNewConversation(title = 'New conversation') {
-		await createNewConversation(title);
-	}
-
-	async function handleSelectConversation(id: string) {
-		resolvedImageUrls = {};
-		errorText = '';
-		lastFailedInput = '';
-		lastFailedImageIds = [];
-		await selectConversation(id);
-	}
+	// ── Image URL resolution ──
 
 	async function resolveImageId(imageId: string) {
 		if (resolvedImageUrls[imageId]) return;
@@ -120,133 +89,100 @@
 		}
 	}
 
-	async function handleSend(reattachImageIds: string[] = []) {
-		if ((!userInput.trim() && pendingFiles.length === 0) || isRunning) return;
+	// ── Settings ──
+
+	async function handleSaveSettings() {
+		await saveSettings({ geminiApiKey: apiKeyInput });
+		showSettings = false;
+	}
+
+	// ── Project actions ──
+
+	async function handleCreateProject() {
+		if (!newProjectName.trim()) return;
+		await createProject(newProjectName.trim());
+		newProjectName = '';
+	}
+
+	async function handleSelectProject(id: string) {
+		revokeImageUrls();
+		resolvedImageUrls = {};
+		await selectProject(id);
+	}
+
+	async function handleDeleteProject() {
+		if (!app.currentProject) return;
+		if (!confirm(`Delete project "${app.currentProject.name}" and all its data?`)) return;
+		await deleteProject();
+	}
+
+	async function handleExportProject() {
+		if (!app.currentProject) return;
+		pageStatus = 'Exporting project...';
+		try {
+			await exportProject();
+			pageStatus = '';
+		} catch (err) {
+			pageStatus = `Export failed: ${err instanceof Error ? err.message : String(err)}`;
+		}
+	}
+
+	async function handleImportProject(e: Event) {
+		const input = e.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		pageStatus = 'Importing project...';
+		try {
+			await importProject(file);
+			pageStatus = '';
+		} catch (err) {
+			pageStatus = `Import failed: ${err instanceof Error ? err.message : String(err)}`;
+		}
+		input.value = '';
+	}
+
+	// ── Conversation actions ──
+
+	async function handleCreateConversation(title = 'New conversation') {
+		await createConversation(title);
+	}
+
+	async function handleSelectConversation(id: string) {
+		resolvedImageUrls = {};
+		clearTurnError();
+		await selectConversation(id);
+	}
+
+	async function handleDeleteConversation(id: string, title: string) {
+		if (!confirm(`Delete conversation "${title}"?`)) return;
+		await deleteConversation(id);
+	}
+
+	// ── Turn execution ──
+
+	async function handleSend() {
+		if ((!userInput.trim() && pendingFiles.length === 0) || turn.isRunning) return;
 		if (!app.currentProject) return;
 
 		const text = userInput.trim();
 		const filesToSend = [...pendingFiles];
-		pendingFiles = [];
-		for (const url of pendingFileUrls.values()) URL.revokeObjectURL(url);
-		pendingFileUrls = new Map();
+		clearPendingFiles();
 
 		// Auto-create a conversation if none selected, titled from the first message.
 		if (!app.currentConversation) {
 			const title = text.length > 50 ? text.slice(0, 50) + '...' : text;
-			await handleNewConversation(title);
+			await handleCreateConversation(title);
 		} else if (app.messages.length === 0 && app.currentConversation.title === 'New conversation') {
-			// Rename a freshly created conversation that hasn't had a message yet.
 			const title = text.length > 50 ? text.slice(0, 50) + '...' : text;
 			await renameConversation(app.currentConversation.id, title);
 		}
+
 		userInput = '';
-		isRunning = true;
-		debugEvents = [];
-		streamingText = '';
-		streamingThought = '';
-		statusText = 'Thinking...';
-		errorText = '';
-
-		const projectId = app.currentProject.id;
-		const conversationId = app.currentConversation!.id;
-
-		// Clean up any leftover error-turn messages from previous failures.
-		await ops.deleteErrorTurnMessages(conversationId);
-		await refreshMessages();
-
-		const ctx: TurnContext = {
-			apiKey: app.settings?.geminiApiKey ?? '',
-			textModel: TEXT_MODEL,
-			imageModel: IMAGE_MODEL,
-			projectName: app.currentProject.name,
-			agentMemories: $state.snapshot(app.agentMemories),
-			projectImages: $state.snapshot(app.projectImages),
-			apiHistory: $state.snapshot(app.currentConversation?.apiHistory ?? [])
-		};
-
-		const actions: TurnActions = {
-			storeImage: (blob, label, opts) => ops.storeImage(projectId, blob, label, opts),
-			getImage: ops.getImage,
-			getImageThumbnail: ops.getImageThumbnailBase64,
-			getAgentMemoryBySlug: (slug) => ops.getAgentMemoryBySlug(projectId, slug),
-			listAgentMemories: () => ops.listAgentMemories(projectId),
-			upsertAgentMemory: (slug, title, summary, content) =>
-				ops.upsertAgentMemory(projectId, slug, title, summary, content)
-		};
-
-		const onEvent = (event: OrchestratorEvent) => {
-			if (event.type.startsWith('debug_')) {
-				debugEvents = [...debugEvents, event];
-			}
-
-			if (event.type === 'text_delta') {
-				streamingText += event.text;
-				statusText = '';
-			} else if (event.type === 'thought_delta') {
-				streamingThought += event.text;
-			} else if (event.type === 'status') statusText = event.text;
-			else if (event.type === 'image_generating') statusText = `Generating: ${event.label}...`;
-			else if (event.type === 'image_complete') {
-				resolveImageId(event.imageId);
-				statusText = `Generated: ${event.label}`;
-			}
-			else if (event.type === 'image_viewing') statusText = `Viewing image...`;
-			else if (event.type === 'memory_updated') {
-				refreshAgentMemories();
-				statusText = `Memory updated: ${event.slug}`;
-			}
-			else if (event.type === 'error') errorText = event.message;
-			else if (event.type === 'done') {
-				statusText = '';
-			}
-		};
-
-		const attachments: UserAttachment[] = filesToSend.map((f) => ({
-			blob: f,
-			label: f.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ')
-		}));
-
-		try {
-			const result = await runAgentTurn(ctx, actions, text, onEvent, attachments, reattachImageIds);
-
-			await ops.persistTurnResult(projectId, conversationId, result);
-
-			await refreshMessages();
-			await refreshProjectImages();
-			streamingText = '';
-			streamingThought = '';
-
-			// Resolve any image references in the new messages.
-			for (const msg of app.messages) {
-				for (const imgId of msg.imageIds) {
-					await resolveImageId(imgId);
-				}
-			}
-
-			if (result.error) {
-				errorText = `API error: ${result.error}`;
-				lastFailedInput = text;
-				lastFailedImageIds = result.userImageIds;
-			} else {
-				lastFailedInput = '';
-				lastFailedImageIds = [];
-			}
-		} catch (err) {
-			errorText = `Error: ${err instanceof Error ? err.message : String(err)}`;
-		} finally {
-			isRunning = false;
-		}
+		await sendMessage({ text, files: filesToSend, onImageGenerated: resolveImageId });
 	}
 
 	async function handleRetry() {
-		if (!lastFailedInput || !app.currentConversation || isRunning) return;
-
-		const imageIds = lastFailedImageIds;
-		userInput = lastFailedInput;
-		lastFailedInput = '';
-		lastFailedImageIds = [];
-		errorText = '';
-		await handleSend(imageIds);
+		await retryMessage(resolveImageId);
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
@@ -256,9 +192,9 @@
 		}
 	}
 
-	/** Render message text as markdown, then resolve [image:id] references. */
+	// ── Rendering ──
+
 	function renderMessageText(text: string): string {
-		// First replace image refs with placeholders that won't be escaped by marked.
 		const withImages = text.replace(
 			/\[image:([^\]]+)\]/g,
 			(_, id) => {
@@ -269,6 +205,8 @@
 		);
 		return marked.parse(withImages, { async: false }) as string;
 	}
+
+	// ── Lightbox ──
 
 	function openLightbox(imageId: string) {
 		lightboxImageId = imageId;
@@ -289,28 +227,18 @@
 		if (e.key === 'Escape') closeLightbox();
 	}
 
-	async function handleDeleteProject() {
-		if (!app.currentProject) return;
-		if (!confirm(`Delete project "${app.currentProject.name}" and all its data?`)) return;
-		await deleteCurrentProject();
-	}
-
-	async function handleDeleteConversation(id: string, title: string) {
-		if (!confirm(`Delete conversation "${title}"?`)) return;
-		await removeConversation(id);
-	}
-
-	const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
+	// ── File attachments ──
 
 	function addFiles(files: FileList | File[]) {
 		const images = Array.from(files).filter((f) => ACCEPTED_IMAGE_TYPES.includes(f.type));
-		if (images.length > 0) {
-			pendingFiles = [...pendingFiles, ...images];
-		}
+		if (images.length > 0) pendingFiles = [...pendingFiles, ...images];
 	}
 
-	// Cache object URLs for pending files to avoid leaking on re-render.
-	let pendingFileUrls = $state<Map<File, string>>(new Map());
+	function clearPendingFiles() {
+		pendingFiles = [];
+		for (const url of pendingFileUrls.values()) URL.revokeObjectURL(url);
+		pendingFileUrls = new Map();
+	}
 
 	function getPendingFileUrl(file: File): string {
 		let url = pendingFileUrls.get(file);
@@ -333,8 +261,6 @@
 		pendingFiles = pendingFiles.filter((_, i) => i !== index);
 	}
 
-	let attachInput = $state<HTMLInputElement>(null!);
-
 	function handleDragOver(e: DragEvent) {
 		e.preventDefault();
 		isDragging = true;
@@ -348,41 +274,14 @@
 	function handleDrop(e: DragEvent) {
 		e.preventDefault();
 		isDragging = false;
-		if (e.dataTransfer?.files) {
-			addFiles(e.dataTransfer.files);
-		}
+		if (e.dataTransfer?.files) addFiles(e.dataTransfer.files);
 	}
+
+	// ── Image management ──
 
 	async function handleDeleteImage(imageId: string, label: string) {
 		if (!confirm(`Delete "${label}"? References in messages will show as missing.`)) return;
-		await removeImage(imageId);
-	}
-
-	async function handleExportProject() {
-		if (!app.currentProject) return;
-		statusText = 'Exporting project...';
-		try {
-			await exportCurrentProject();
-			statusText = '';
-		} catch (err) {
-			statusText = `Export failed: ${err instanceof Error ? err.message : String(err)}`;
-		}
-	}
-
-	let importFileInput = $state<HTMLInputElement>(null!);
-
-	async function handleImportFile(e: Event) {
-		const input = e.target as HTMLInputElement;
-		const file = input.files?.[0];
-		if (!file) return;
-		statusText = 'Importing project...';
-		try {
-			await importProjectZip(file);
-			statusText = '';
-		} catch (err) {
-			statusText = `Import failed: ${err instanceof Error ? err.message : String(err)}`;
-		}
-		input.value = '';
+		await deleteImage(imageId);
 	}
 </script>
 
@@ -465,12 +364,12 @@
 					bind:this={importFileInput}
 					type="file"
 					accept=".zip"
-					onchange={handleImportFile}
+					onchange={handleImportProject}
 					style="display: none;"
 				/>
 			</div>
-			{#if statusText}
-				<p class="status">{statusText}</p>
+			{#if pageStatus}
+				<p class="status">{pageStatus}</p>
 			{/if}
 			{#if app.projects.length === 0}
 				<p class="empty-state">No projects yet. Create one to get started.</p>
@@ -487,7 +386,7 @@
 		<!-- Project workspace -->
 		<div class="workspace">
 			<aside class="sidebar">
-				<button class="new-convo" onclick={() => handleNewConversation()}>+ New Conversation</button>
+				<button class="new-convo" onclick={() => handleCreateConversation()}>+ New Conversation</button>
 				{#each app.conversations as convo}
 					<div class="convo-row" class:active={app.currentConversation?.id === convo.id}>
 						<button
@@ -602,37 +501,37 @@
 						</div>
 					{/each}
 
-					{#if streamingThought}
+					{#if turn.streamingThought}
 						<div class="message assistant">
 							<div class="message-role">Thinking</div>
-							<div class="message-text thought-text">{streamingThought}</div>
+							<div class="message-text thought-text">{turn.streamingThought}</div>
 						</div>
 					{/if}
 
-					{#if streamingText}
+					{#if turn.streamingText}
 						<div class="message assistant">
 							<div class="message-role">Assistant</div>
-							<div class="message-text">{@html renderMessageText(streamingText)}</div>
+							<div class="message-text">{@html renderMessageText(turn.streamingText)}</div>
 						</div>
 					{/if}
 
-					{#if statusText}
-						<div class="status">{statusText}</div>
+					{#if turn.statusText || pageStatus}
+						<div class="status">{turn.statusText || pageStatus}</div>
 					{/if}
 
-					{#if errorText}
+					{#if turn.errorText}
 						<div class="status error">
-							{errorText}
-							{#if !isRunning}
+							{turn.errorText}
+							{#if !turn.isRunning}
 								<button class="retry-btn" onclick={handleRetry}>Retry</button>
 							{/if}
 						</div>
 					{/if}
 
-					{#if showDebug && debugEvents.length > 0}
+					{#if showDebug && turn.debugEvents.length > 0}
 						<details class="debug-log" open>
 							<summary>Debug Log</summary>
-							{#each debugEvents as event}
+							{#each turn.debugEvents as event}
 								{#if event.type === 'debug_system_prompt'}
 									<div class="debug-entry debug-system">
 										<div class="debug-label">System Prompt</div>
@@ -686,7 +585,7 @@
 					<button
 						class="attach-btn"
 						onclick={() => attachInput.click()}
-						disabled={isRunning || !app.settings?.geminiApiKey}
+						disabled={turn.isRunning || !app.settings?.geminiApiKey}
 						title="Attach images"
 					>
 						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -705,11 +604,11 @@
 						bind:value={userInput}
 						onkeydown={handleKeydown}
 						placeholder={app.settings?.geminiApiKey ? 'Describe what you want to create...' : 'Set your API key in Settings first'}
-						disabled={isRunning || !app.settings?.geminiApiKey}
+						disabled={turn.isRunning || !app.settings?.geminiApiKey}
 						rows={3}
 					></textarea>
-					<button onclick={() => handleSend()} disabled={isRunning || (!userInput.trim() && pendingFiles.length === 0)}>
-						{isRunning ? '...' : 'Send'}
+					<button onclick={() => handleSend()} disabled={turn.isRunning || (!userInput.trim() && pendingFiles.length === 0)}>
+						{turn.isRunning ? '...' : 'Send'}
 					</button>
 				</div>
 			</main>

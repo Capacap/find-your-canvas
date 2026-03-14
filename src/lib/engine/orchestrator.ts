@@ -57,10 +57,10 @@ export interface TurnContext {
 
 /** Side effects the orchestrator can perform during tool execution. */
 export interface TurnActions {
-	storeImage(blob: Blob, label: string, opts?: { source?: ImageSource; generationContext?: string }): Promise<ImageMeta>;
+	createImage(blob: Blob, label: string, opts?: { source?: ImageSource; generationContext?: string }): Promise<ImageMeta>;
 	getImage(id: string): Promise<(ImageMeta & ImageBlob) | undefined>;
 	getImageThumbnail(id: string): Promise<{ base64: string; mimeType: string } | undefined>;
-	getAgentMemoryBySlug(slug: string): Promise<AgentMemory | undefined>;
+	getAgentMemory(slug: string): Promise<AgentMemory | undefined>;
 	listAgentMemories(): Promise<AgentMemory[]>;
 	upsertAgentMemory(slug: string, title: string, summary: string, content: string): Promise<void>;
 }
@@ -177,7 +177,7 @@ async function processAttachments(
 	const results = await Promise.all(
 		attachments.map(async (attachment) => {
 			const [stored, base64] = await Promise.all([
-				actions.storeImage(attachment.blob, attachment.label, { source: 'user' }),
+				actions.createImage(attachment.blob, attachment.label, { source: 'user' }),
 				blobToBase64(attachment.blob)
 			]);
 			return {
@@ -255,12 +255,12 @@ const TOOL_DECLARATIONS: FunctionDeclaration[] = [
 		parameters: {
 			type: Type.OBJECT,
 			properties: {
-				topic: {
+				slug: {
 					type: Type.STRING,
 					description: 'The slug of the memory topic to read (from the memory index in the system prompt).'
 				}
 			},
-			required: ['topic']
+			required: ['slug']
 		}
 	},
 	{
@@ -270,7 +270,7 @@ const TOOL_DECLARATIONS: FunctionDeclaration[] = [
 		parameters: {
 			type: Type.OBJECT,
 			properties: {
-				topic: {
+				slug: {
 					type: Type.STRING,
 					description:
 						'Slug for the topic. Use lowercase-kebab-case, e.g. "art-style", "characters", "world-rules". Must be unique within the project.'
@@ -288,7 +288,7 @@ const TOOL_DECLARATIONS: FunctionDeclaration[] = [
 					description: 'Full markdown content. Pass empty string to delete the topic.'
 				}
 			},
-			required: ['topic', 'title', 'summary', 'content']
+			required: ['slug', 'title', 'summary', 'content']
 		}
 	}
 ];
@@ -305,30 +305,30 @@ interface ToolExecResult {
 type ToolArgs = Record<string, unknown>;
 
 /** Build a functionResponse part. */
-function toolResponse(name: string, response: Record<string, unknown>): Part {
-	return { functionResponse: { name, response } };
+function functionResponsePart(toolName: string, response: Record<string, unknown>): Part {
+	return { functionResponse: { name: toolName, response } };
 }
 
 /** Build a ToolExecResult for an error, emitting an event. */
-function toolError(name: string, err: unknown, label: string, onEvent: EventCallback): ToolExecResult {
+function toolErrorResult(toolName: string, err: unknown, label: string, onEvent: EventCallback): ToolExecResult {
 	const msg = err instanceof Error ? err.message : String(err);
 	onEvent({ type: 'error', message: `${label}: ${msg}` });
-	return { responseParts: [toolResponse(name, { error: msg })] };
+	return { responseParts: [functionResponsePart(toolName, { error: msg })] };
 }
 
 async function handleGenerateImage(
-	name: string, args: ToolArgs, ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
+	toolName: string, args: ToolArgs, ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
 ): Promise<ToolExecResult> {
 	const label = (args.label as string) || 'generated_image';
 	const prompt = args.prompt as string;
 	const aspectRatio = args.aspect_ratio as string | undefined;
-	const refIds = (args.reference_image_ids as string[] | undefined) ?? [];
+	const referenceImageIds = (args.reference_image_ids as string[] | undefined) ?? [];
 
 	onEvent({ type: 'image_generating', label });
 
 	try {
 		const inputImages = (await Promise.all(
-			refIds.map(async (refId) => {
+			referenceImageIds.map(async (refId) => {
 				const img = await actions.getImage(refId);
 				if (!img) return null;
 				const data = await blobToBase64(img.blob);
@@ -341,7 +341,7 @@ async function handleGenerateImage(
 			inputImages: inputImages.length > 0 ? inputImages : undefined
 		});
 		const blob = await base64ToBlob(imageResponse.imageData, imageResponse.mimeType);
-		const stored = await actions.storeImage(blob, label, { generationContext: prompt });
+		const stored = await actions.createImage(blob, label, { generationContext: prompt });
 
 		onEvent({ type: 'image_complete', imageId: stored.id, label });
 
@@ -353,16 +353,16 @@ async function handleGenerateImage(
 			response.thumbnail = { base64: thumb.base64, mimeType: thumb.mimeType };
 		}
 		return {
-			responseParts: [toolResponse(name, response)],
+			responseParts: [functionResponsePart(toolName, response)],
 			imageId: stored.id
 		};
 	} catch (err) {
-		return toolError(name, err, 'Image generation failed', onEvent);
+		return toolErrorResult(toolName, err, 'Image generation failed', onEvent);
 	}
 }
 
 async function handleViewImage(
-	name: string, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
+	toolName: string, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
 ): Promise<ToolExecResult> {
 	const imageId = args.image_id as string;
 	const reason = args.reason as string | undefined;
@@ -372,52 +372,52 @@ async function handleViewImage(
 	try {
 		const thumb = await actions.getImageThumbnail(imageId);
 		if (!thumb) {
-			return { responseParts: [toolResponse(name, { error: `Image not found: ${imageId}` })] };
+			return { responseParts: [functionResponsePart(toolName, { error: `Image not found: ${imageId}` })] };
 		}
 
 		return {
 			responseParts: [
-				toolResponse(name, {
+				functionResponsePart(toolName, {
 					output: `Showing image ${imageId}`,
 					image: { base64: thumb.base64, mimeType: thumb.mimeType }
 				})
 			]
 		};
 	} catch (err) {
-		return toolError(name, err, 'Failed to view image', onEvent);
+		return toolErrorResult(toolName, err, 'Failed to view image', onEvent);
 	}
 }
 
 async function handleReadMemory(
-	name: string, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
+	toolName: string, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
 ): Promise<ToolExecResult> {
-	const slug = args.topic as string;
+	const slug = args.slug as string;
 
 	try {
-		const topic = await actions.getAgentMemoryBySlug(slug);
-		if (!topic) {
-			const allTopics = await actions.listAgentMemories();
-			const available = allTopics.map((t) => t.slug).join(', ');
+		const memory = await actions.getAgentMemory(slug);
+		if (!memory) {
+			const allMemories = await actions.listAgentMemories();
+			const available = allMemories.map((t) => t.slug).join(', ');
 			const hint = available
 				? `Topic "${slug}" not found. Available topics: ${available}`
 				: `Topic "${slug}" not found. No topics exist yet. Use update_memory to create one.`;
-			return { responseParts: [toolResponse(name, { error: hint })] };
+			return { responseParts: [functionResponsePart(toolName, { error: hint })] };
 		}
 
 		return {
 			responseParts: [
-				toolResponse(name, { slug: topic.slug, title: topic.title, content: topic.content })
+				functionResponsePart(toolName, { slug: memory.slug, title: memory.title, content: memory.content })
 			]
 		};
 	} catch (err) {
-		return toolError(name, err, 'Failed to read memory', onEvent);
+		return toolErrorResult(toolName, err, 'Failed to read memory', onEvent);
 	}
 }
 
 async function handleUpdateMemory(
-	name: string, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
+	toolName: string, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
 ): Promise<ToolExecResult> {
-	const slug = args.topic as string;
+	const slug = args.slug as string;
 	const title = args.title as string;
 	const summary = args.summary as string;
 	const content = args.content as string;
@@ -427,14 +427,14 @@ async function handleUpdateMemory(
 		onEvent({ type: 'memory_updated', slug });
 
 		const verb = content.trim() ? 'updated' : 'deleted';
-		return { responseParts: [toolResponse(name, { output: `Memory topic "${slug}" ${verb}.` })] };
+		return { responseParts: [functionResponsePart(toolName, { output: `Memory topic "${slug}" ${verb}.` })] };
 	} catch (err) {
-		return toolError(name, err, 'Failed to update memory', onEvent);
+		return toolErrorResult(toolName, err, 'Failed to update memory', onEvent);
 	}
 }
 
 type ToolHandler = (
-	name: string, args: ToolArgs, ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
+	toolName: string, args: ToolArgs, ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
 ) => Promise<ToolExecResult>;
 
 const toolHandlers: Record<string, ToolHandler> = {
@@ -455,7 +455,7 @@ async function executeToolCall(
 	const handler = toolHandlers[name];
 
 	if (!handler) {
-		return { responseParts: [toolResponse(name, { error: `Unknown tool: ${name}` })] };
+		return { responseParts: [functionResponsePart(name, { error: `Unknown tool: ${name}` })] };
 	}
 
 	return handler(name, args, ctx, actions, onEvent);
@@ -465,6 +465,16 @@ async function executeToolCall(
 
 let turnInProgress = false;
 
+/**
+ * Execute a single agent turn: send the user's message, handle any tool-call
+ * rounds, and return everything the caller needs to persist.
+ *
+ * On error, returns partial results with apiHistory rolled back to its
+ * pre-turn state so the conversation can safely continue.
+ *
+ * @param reattachImageIds - Image IDs from a previous failed turn to re-send
+ *   as inline data without re-storing them.
+ */
 export async function runAgentTurn(
 	ctx: TurnContext,
 	actions: TurnActions,
@@ -505,6 +515,7 @@ async function runAgentTurnInner(
 	const config = {
 		systemInstruction: systemPrompt,
 		tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
+		// LOW thinking: enough for tool-call reasoning without burning tokens on reflection.
 		thinkingConfig: { includeThoughts: true, thinkingLevel: ThinkingLevel.LOW }
 	};
 
@@ -528,6 +539,7 @@ async function runAgentTurnInner(
 			}
 		}
 
+		// First iteration: user message + attachments. Subsequent iterations: tool response parts.
 		let currentParts: Part[] = [{ text: userText }, ...attachmentResult.parts, ...reattachParts];
 		for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
 			if (_debugFaultRound !== null && round === _debugFaultRound) {

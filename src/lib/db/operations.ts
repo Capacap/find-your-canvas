@@ -102,7 +102,7 @@ export async function listAgentMemories(projectId: string): Promise<AgentMemory[
 	return db.agentMemories.where('projectId').equals(projectId).toArray();
 }
 
-export async function getAgentMemoryBySlug(projectId: string, slug: string): Promise<AgentMemory | undefined> {
+export async function getAgentMemory(projectId: string, slug: string): Promise<AgentMemory | undefined> {
 	return db.agentMemories.where('[projectId+slug]').equals([projectId, slug]).first();
 }
 
@@ -184,10 +184,6 @@ export async function updateConversation(
 	await db.conversations.update(id, { ...patch, updatedAt: now() });
 }
 
-export async function updateConversationHistory(id: string, apiHistory: Conversation['apiHistory']): Promise<void> {
-	await db.conversations.update(id, { apiHistory, updatedAt: now() });
-}
-
 export async function deleteConversation(id: string): Promise<void> {
 	await db.transaction('rw', [db.conversations, db.messages, db.imageMeta, db.projects], async () => {
 		const convo = await db.conversations.get(id);
@@ -211,33 +207,6 @@ export async function deleteConversation(id: string): Promise<void> {
 
 // ── Messages ──
 
-export async function addMessage(
-	projectId: string,
-	conversationId: string,
-	role: ChatMessage['role'],
-	text: string,
-	imageIds: string[] = [],
-	options: { errorTurn?: boolean } = {}
-): Promise<ChatMessage> {
-	const timestamp = now();
-	const message: ChatMessage = {
-		id: generateId(),
-		conversationId,
-		role,
-		text,
-		imageIds,
-		...(options.errorTurn ? { errorTurn: true } : {}),
-		createdAt: timestamp
-	};
-	await db.transaction('rw', [db.messages, db.conversations, db.projects], async () => {
-		await db.messages.add(message);
-		await db.conversations.update(conversationId, { updatedAt: timestamp });
-		await db.projects.update(projectId, { updatedAt: timestamp });
-	});
-
-	return message;
-}
-
 export async function listMessages(conversationId: string): Promise<ChatMessage[]> {
 	return db.messages
 		.where('conversationId')
@@ -249,7 +218,7 @@ export async function listMessages(conversationId: string): Promise<ChatMessage[
  * Persist the result of an agent turn atomically: user message, assistant
  * message, and updated apiHistory in a single transaction.
  */
-export async function persistTurnResult(
+export async function saveTurnResult(
 	projectId: string,
 	conversationId: string,
 	result: {
@@ -284,7 +253,7 @@ export async function persistTurnResult(
 				text: result.assistantText,
 				imageIds: result.assistantImageIds,
 				...(isError ? { errorTurn: true } : {}),
-				createdAt: timestamp + 1
+				createdAt: timestamp + 1 // +1ms ensures assistant sorts after user in createdAt order
 			});
 		}
 		await db.conversations.update(conversationId, { apiHistory: result.apiHistory, updatedAt: timestamp });
@@ -293,7 +262,7 @@ export async function persistTurnResult(
 }
 
 /** Delete all messages from a failed turn. Called at the start of the next turn. */
-export async function deleteErrorTurnMessages(conversationId: string): Promise<void> {
+export async function deleteErrorMessages(conversationId: string): Promise<void> {
 	await db.messages
 		.where('conversationId')
 		.equals(conversationId)
@@ -303,7 +272,7 @@ export async function deleteErrorTurnMessages(conversationId: string): Promise<v
 
 // ── Images ──
 
-export async function storeImage(
+export async function createImage(
 	projectId: string,
 	blob: Blob,
 	label: string,
@@ -341,11 +310,6 @@ export async function storeImage(
 	return meta;
 }
 
-/** Get image metadata only (no blobs). */
-export async function getImageMeta(id: string): Promise<ImageMeta | undefined> {
-	return db.imageMeta.get(id);
-}
-
 /** Get full image record including blobs. */
 export async function getImage(id: string): Promise<(ImageMeta & ImageBlob) | undefined> {
 	const meta = await db.imageMeta.get(id);
@@ -361,7 +325,7 @@ export async function getImageBlob(id: string): Promise<ImageBlob | undefined> {
 }
 
 /** List image metadata for a project (no blobs loaded). */
-export async function listProjectImages(projectId: string): Promise<ImageMeta[]> {
+export async function listImages(projectId: string): Promise<ImageMeta[]> {
 	return db.imageMeta.where('projectId').equals(projectId).toArray();
 }
 
@@ -373,18 +337,10 @@ export async function deleteImage(id: string): Promise<void> {
 }
 
 /**
- * Create a temporary object URL for displaying an image.
- * Caller is responsible for revoking it when done.
- */
-export function blobToObjectUrl(blob: Blob): string {
-	return URL.createObjectURL(blob);
-}
-
-/**
  * Get the thumbnail for an image as a base64 string.
  */
-export async function getImageThumbnailBase64(imageId: string): Promise<{ base64: string; mimeType: string } | undefined> {
-	const meta = await db.imageMeta.get(imageId);
+export async function getImageThumbnail(id: string): Promise<{ base64: string; mimeType: string } | undefined> {
+	const meta = await db.imageMeta.get(id);
 	if (!meta) return undefined;
 
 	const base64 = await blobToBase64(meta.thumbnail);
