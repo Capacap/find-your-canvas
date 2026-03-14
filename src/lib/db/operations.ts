@@ -169,6 +169,10 @@ export async function createConversation(projectId: string, title: string): Prom
   return conversation;
 }
 
+export async function getConversation(id: string): Promise<Conversation | undefined> {
+  return db.conversations.get(id);
+}
+
 export async function listConversations(projectId: string): Promise<Conversation[]> {
   const convos = await db.conversations
     .where('projectId')

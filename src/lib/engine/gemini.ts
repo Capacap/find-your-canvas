@@ -185,3 +185,24 @@ export async function generateImage(
     .join('');
   throw new Error('Image model did not return an image. Response text: ' + text);
 }
+
+// ── Token counting ──
+
+export async function countTokens(
+  apiKey: string,
+  modelId: string,
+  contents: Content[],
+  systemInstruction?: string
+): Promise<number | null> {
+  try {
+    const client = getClient(apiKey);
+    const result = await client.models.countTokens({
+      model: modelId,
+      contents,
+      config: systemInstruction ? { systemInstruction } : undefined
+    });
+    return result.totalTokens ?? null;
+  } catch {
+    return null;
+  }
+}

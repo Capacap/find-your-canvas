@@ -135,6 +135,13 @@ export async function refreshMessages(): Promise<void> {
   }
 }
 
+export async function refreshConversation(): Promise<void> {
+  if (currentConversation) {
+    const fresh = await ops.getConversation(currentConversation.id);
+    if (fresh) currentConversation = fresh;
+  }
+}
+
 export async function refreshAgentMemories(): Promise<void> {
   if (currentProject) {
     agentMemories = await ops.listAgentMemories(currentProject.id);

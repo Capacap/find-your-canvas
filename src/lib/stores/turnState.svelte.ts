@@ -10,7 +10,8 @@ import {
   getAppState,
   refreshMessages,
   refreshProjectImages,
-  refreshAgentMemories
+  refreshAgentMemories,
+  refreshConversation
 } from './appState.svelte';
 import {
   runAgentTurn,
@@ -54,6 +55,11 @@ export function clearTurnError(): void {
   retryImageIds = [];
 }
 
+/** Clear the debug event log. */
+export function clearDebugLog(): void {
+  debugEvents = [];
+}
+
 /** Cancel the currently running turn, if any. */
 export function cancelTurn(): void {
   if (abortController) {
@@ -88,7 +94,9 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
 
   abortController = new AbortController();
   isRunning = true;
-  debugEvents = [];
+  if (debugEvents.length > 0) {
+    debugEvents = [...debugEvents, { type: 'debug_turn_boundary' as const, timestamp: Date.now() }];
+  }
   streamingText = '';
   streamingThought = '';
   statusText = 'Thinking...';
@@ -156,6 +164,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
 
     await ops.saveTurnResult(projectId, conversationId, result);
 
+    await refreshConversation();
     await refreshMessages();
     await refreshProjectImages();
     streamingText = '';

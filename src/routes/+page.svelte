@@ -19,8 +19,10 @@
     importProject,
     deleteImage
   } from '$lib/stores/appState.svelte';
-  import { getTurnState, sendMessage, retryMessage, clearTurnError, cancelTurn } from '$lib/stores/turnState.svelte';
+  import { getTurnState, sendMessage, retryMessage, clearTurnError, clearDebugLog, cancelTurn } from '$lib/stores/turnState.svelte';
   import { debugInjectFault, buildSystemPrompt } from '$lib/engine/orchestrator';
+  import { countTokens } from '$lib/engine/gemini';
+  import { TEXT_MODEL } from '$lib/types/schema';
   import type { Content } from '@google/genai';
   import { marked } from 'marked';
 
@@ -152,6 +154,8 @@
   async function handleSelectConversation(id: string) {
     resolvedImageUrls = {};
     clearTurnError();
+    clearDebugLog();
+    contextSnapshot = null;
     await selectConversation(id);
   }
 
@@ -288,89 +292,220 @@
 
   // ── Context snapshot ──
 
-  interface ContextImageEntry {
-    /** Where the image data lives in history. */
-    source: 'inline' | 'tool_response';
-    role: string;
-    mimeType: string;
-    sizeKB: number;
-    /** For tool responses: which tool produced it. */
-    toolName?: string;
-  }
-
   interface ContextSnapshot {
+    meta: {
+      takenAt: number;
+      contentEntries: number;
+      turns: number;
+      imageCount: number;
+      imageTotalKB: number;
+      tokenCount: number | null;
+    };
+    contextDump: string;
     systemPrompt: string;
-    historyMessageCount: number;
-    historyImageData: ContextImageEntry[];
-    memoryTopics: { slug: string; title: string; summary: string }[];
-    imageIndex: { id: string; label: string; source: string }[];
-    takenAt: number;
   }
 
   let contextSnapshot = $state<ContextSnapshot | null>(null);
+  let snapshotLoading = $state(false);
 
-  function takeSnapshot() {
-    if (!app.currentProject) return;
+  /** Render a single Part to readable text. Returns null for parts that should be skipped. */
+  function renderPart(part: any): string | null {
+    // Structured parts first — these take priority over text.
+    if (part.functionCall) {
+      const name = part.functionCall.name ?? 'unknown';
+      const args = part.functionCall.args ?? {};
+      return `[Tool Call: ${name}]\n${JSON.stringify(args, null, 2)}`;
+    }
+    if (part.functionResponse) {
+      const name = part.functionResponse.name ?? 'unknown';
+      const resp = part.functionResponse.response ?? {};
+      const redacted = { ...resp };
+      for (const key of ['thumbnail', 'image'] as const) {
+        const val = redacted[key] as { base64?: string; mimeType?: string } | undefined;
+        if (val?.base64) {
+          const kb = Math.ceil((val.base64.length * 3) / 4 / 1024);
+          redacted[key] = { mimeType: val.mimeType, data: `[${kb} KB]` };
+        }
+      }
+      return `[Tool Result: ${name}]\n${JSON.stringify(redacted, null, 2)}`;
+    }
+    if (part.inlineData?.data) {
+      const kb = Math.ceil((part.inlineData.data.length * 3) / 4 / 1024);
+      return `[Image: ${part.inlineData.mimeType ?? 'unknown'}, ${kb} KB]`;
+    }
+    // Thinking content (has thought flag + text).
+    if (part.thought && part.text) return `[Thinking]\n${part.text}`;
+    // Thought signatures are internal bookkeeping, skip.
+    if (part.thoughtSignature) return null;
+    // Plain text — return it, or null if empty.
+    if (part.text) return part.text;
+    // Empty text parts, unknown parts — skip.
+    return null;
+  }
 
-    const history: Content[] = app.currentConversation?.apiHistory ?? [];
-    const historyImageData: ContextImageEntry[] = [];
+  /** Count image data in a Part for the meta summary. */
+  function countPartImages(part: any): { count: number; kb: number } {
+    let count = 0, kb = 0;
+    if (part.inlineData?.data) {
+      count++;
+      kb += Math.ceil((part.inlineData.data.length * 3) / 4 / 1024);
+    }
+    if (part.functionResponse?.response) {
+      const resp = part.functionResponse.response;
+      for (const key of ['thumbnail', 'image']) {
+        if (resp[key]?.base64) {
+          count++;
+          kb += Math.ceil((resp[key].base64.length * 3) / 4 / 1024);
+        }
+      }
+    }
+    return { count, kb };
+  }
+
+  /**
+   * Determine the display label for a Content entry. The Gemini SDK uses
+   * 'user' role for both real user messages and tool-result submissions,
+   * so we distinguish based on what parts are present.
+   */
+  function contentLabel(content: Content): string {
+    const parts = (content.parts ?? []) as any[];
+    const role = content.role ?? 'unknown';
+    if (role === 'user' && parts.some((p: any) => p.functionResponse)) return 'TOOL RESULTS';
+    if (role === 'model' && parts.some((p: any) => p.functionCall)) return 'TOOL CALLS';
+    return role.toUpperCase();
+  }
+
+  /**
+   * Classify what a Part contains so we know how to join consecutive parts.
+   * Plain text fragments from streaming should be concatenated without newlines;
+   * structured parts (tool calls, images, etc.) need separation.
+   */
+  function isPlainTextPart(part: any): boolean {
+    return !part.functionCall && !part.functionResponse && !part.inlineData
+      && !part.thought && !part.thoughtSignature && !!part.text;
+  }
+
+  function buildContextDump(systemPrompt: string, history: Content[]): { text: string; imageCount: number; imageTotalKB: number } {
+    const lines: string[] = [];
+    let imageCount = 0;
+    let imageTotalKB = 0;
+
+    lines.push('=== SYSTEM INSTRUCTION ===', '', systemPrompt, '');
+
+    // Merge consecutive entries with the same label. The Gemini SDK splits
+    // streaming responses into many Content objects, which produces an
+    // unreadable dump if rendered individually.
+    let currentLabel = '';
+    // Accumulate plain text fragments to concatenate without newlines.
+    let pendingText = '';
+
+    function flushText() {
+      if (pendingText) {
+        lines.push(pendingText);
+        pendingText = '';
+      }
+    }
 
     for (const content of history) {
-      if (!content.parts) continue;
-      for (const part of content.parts as any[]) {
-        // User-uploaded images: inlineData parts
-        if (part.inlineData?.data) {
-          historyImageData.push({
-            source: 'inline',
-            role: content.role ?? 'unknown',
-            mimeType: part.inlineData.mimeType ?? 'unknown',
-            sizeKB: Math.ceil(part.inlineData.data.length / 1024)
-          });
+      if (!content.parts || content.parts.length === 0) continue;
+
+      const parts = content.parts as any[];
+
+      // Count images for meta.
+      for (const part of parts) {
+        const imgs = countPartImages(part);
+        imageCount += imgs.count;
+        imageTotalKB += imgs.kb;
+      }
+
+      // When a model Content has both text and functionCall parts, the
+      // text is the model's reasoning/response and the function calls are
+      // its tool invocations. Split them into separate labeled sections
+      // so the text doesn't vanish under the "TOOL CALLS" header.
+      const role = content.role ?? 'unknown';
+      const hasNonCallContent = parts.some((p: any) => !p.functionCall && renderPart(p) !== null);
+      const hasCalls = parts.some((p: any) => p.functionCall);
+
+      const sections: { label: string; parts: any[] }[] = [];
+
+      if (role === 'model' && hasNonCallContent && hasCalls) {
+        // Split: text parts under MODEL, functionCall parts under TOOL CALLS.
+        sections.push(
+          { label: 'MODEL', parts: parts.filter((p: any) => !p.functionCall) },
+          { label: 'TOOL CALLS', parts: parts.filter((p: any) => p.functionCall) }
+        );
+      } else {
+        sections.push({ label: contentLabel(content), parts });
+      }
+
+      for (const section of sections) {
+        // Pre-render parts; skip sections that produce no visible output
+        // (e.g. Content with only thoughtSignature parts).
+        const rendered: { part: any; text: string }[] = [];
+        for (const part of section.parts) {
+          const text = renderPart(part);
+          if (text !== null) rendered.push({ part, text });
         }
-        // Tool response images: thumbnails nested in functionResponse
-        if (part.functionResponse?.response) {
-          const resp = part.functionResponse.response;
-          const toolName = part.functionResponse.name ?? 'unknown';
-          // generate_image returns { thumbnail: { base64, mimeType } }
-          if (resp.thumbnail?.base64) {
-            historyImageData.push({
-              source: 'tool_response',
-              role: content.role ?? 'unknown',
-              mimeType: resp.thumbnail.mimeType ?? 'image/jpeg',
-              sizeKB: Math.ceil(resp.thumbnail.base64.length / 1024),
-              toolName
-            });
-          }
-          // view_image returns { image: { base64, mimeType } }
-          if (resp.image?.base64) {
-            historyImageData.push({
-              source: 'tool_response',
-              role: content.role ?? 'unknown',
-              mimeType: resp.image.mimeType ?? 'image/jpeg',
-              sizeKB: Math.ceil(resp.image.base64.length / 1024),
-              toolName
-            });
+        if (rendered.length === 0) continue;
+
+        if (section.label !== currentLabel) {
+          flushText();
+          if (currentLabel) lines.push('');
+          lines.push(`--- ${section.label} ---`);
+          currentLabel = section.label;
+        }
+
+        for (const { part, text } of rendered) {
+          if (isPlainTextPart(part)) {
+            pendingText += text;
+          } else {
+            flushText();
+            lines.push(text);
           }
         }
       }
     }
 
-    contextSnapshot = {
-      systemPrompt: buildSystemPrompt(
+    flushText();
+    lines.push('');
+    return { text: lines.join('\n'), imageCount, imageTotalKB };
+  }
+
+  async function takeSnapshot() {
+    if (!app.currentProject) return;
+    snapshotLoading = true;
+
+    try {
+      const history: Content[] = app.currentConversation?.apiHistory ?? [];
+      const systemPrompt = buildSystemPrompt(
         app.currentProject.name,
         app.agentMemories,
         app.projectImages
-      ),
-      historyMessageCount: history.length,
-      historyImageData,
-      memoryTopics: app.agentMemories.map((m) => ({
-        slug: m.slug, title: m.title, summary: m.summary
-      })),
-      imageIndex: app.projectImages.map((i) => ({
-        id: i.id, label: i.label, source: i.source
-      })),
-      takenAt: Date.now()
-    };
+      );
+
+      const { text: contextDump, imageCount, imageTotalKB } = buildContextDump(systemPrompt, history);
+
+      let tokenCount: number | null = null;
+      const apiKey = app.settings?.geminiApiKey;
+      if (apiKey) {
+        tokenCount = await countTokens(apiKey, TEXT_MODEL, history, systemPrompt);
+      }
+
+      contextSnapshot = {
+        meta: {
+          takenAt: Date.now(),
+          contentEntries: history.length,
+          turns: Math.floor(history.length / 2),
+          imageCount,
+          imageTotalKB,
+          tokenCount
+        },
+        contextDump,
+        systemPrompt
+      };
+    } finally {
+      snapshotLoading = false;
+    }
   }
 </script>
 
@@ -563,7 +698,7 @@
           <div class="debug-panel-tabs">
             <button
               class:active={debugTab === 'context'}
-              onclick={() => { debugTab = 'context'; takeSnapshot(); }}
+              onclick={() => { debugTab = 'context'; if (!contextSnapshot) takeSnapshot(); }}
             >Context</button>
             <button
               class:active={debugTab === 'log'}
@@ -573,82 +708,48 @@
 
           {#if debugTab === 'context'}
             <div class="debug-panel-body">
-              <button class="snapshot-refresh" onclick={takeSnapshot}>
-                Refresh
+              <button class="snapshot-refresh" onclick={takeSnapshot} disabled={snapshotLoading}>
+                {snapshotLoading ? 'Loading...' : 'Refresh'}
               </button>
 
               {#if contextSnapshot}
-                <div class="snapshot-time">
-                  {new Date(contextSnapshot.takenAt).toLocaleTimeString()}
-                </div>
-
-                <div class="snapshot-section">
-                  <div class="snapshot-heading">API History</div>
-                  <div class="snapshot-stat">
-                    {contextSnapshot.historyMessageCount} messages
+                <div class="snapshot-meta">
+                  <div class="snapshot-time">
+                    Snapshot {new Date(contextSnapshot.meta.takenAt).toLocaleTimeString()}
                   </div>
-                  {#if contextSnapshot.historyImageData.length > 0}
-                    <div class="snapshot-stat">
-                      {contextSnapshot.historyImageData.length} images in context
-                      ({contextSnapshot.historyImageData.reduce((s, i) => s + i.sizeKB, 0)} KB base64)
-                    </div>
-                    {#if contextSnapshot.historyImageData.some(i => i.source === 'inline')}
-                      <div class="snapshot-subheading">User uploads ({contextSnapshot.historyImageData.filter(i => i.source === 'inline').length})</div>
-                      {#each contextSnapshot.historyImageData.filter(i => i.source === 'inline') as img}
-                        <div class="snapshot-detail">{img.mimeType} ({img.sizeKB} KB)</div>
-                      {/each}
-                    {/if}
-                    {#if contextSnapshot.historyImageData.some(i => i.source === 'tool_response')}
-                      <div class="snapshot-subheading">Tool responses ({contextSnapshot.historyImageData.filter(i => i.source === 'tool_response').length})</div>
-                      {#each contextSnapshot.historyImageData.filter(i => i.source === 'tool_response') as img}
-                        <div class="snapshot-detail">{img.toolName}: {img.mimeType} ({img.sizeKB} KB)</div>
-                      {/each}
-                    {/if}
-                  {:else}
-                    <div class="snapshot-stat dim">No image data in history</div>
-                  {/if}
-                </div>
-
-                <div class="snapshot-section">
-                  <div class="snapshot-heading">
-                    Image Index ({contextSnapshot.imageIndex.length})
-                  </div>
-                  {#each contextSnapshot.imageIndex as img}
-                    <div class="snapshot-image-row">
-                      {#if resolvedImageUrls[img.id]}
-                        <img src={resolvedImageUrls[img.id]} alt={img.label} class="snapshot-thumb" />
+                  <div class="snapshot-meta-grid">
+                    <span class="meta-label">Turns</span>
+                    <span class="meta-value">{contextSnapshot.meta.turns}</span>
+                    <span class="meta-label">Content entries</span>
+                    <span class="meta-value">{contextSnapshot.meta.contentEntries}</span>
+                    <span class="meta-label">Images</span>
+                    <span class="meta-value">
+                      {contextSnapshot.meta.imageCount}
+                      {#if contextSnapshot.meta.imageTotalKB > 0}
+                        ({contextSnapshot.meta.imageTotalKB} KB)
                       {/if}
-                      <div>
-                        <div class="snapshot-image-label">{img.label}</div>
-                        <div class="snapshot-detail">{img.source} · {img.id.slice(0, 8)}</div>
-                      </div>
-                    </div>
-                  {/each}
-                  {#if contextSnapshot.imageIndex.length === 0}
-                    <div class="snapshot-stat dim">No images</div>
-                  {/if}
-                </div>
-
-                <div class="snapshot-section">
-                  <div class="snapshot-heading">
-                    Memory Topics ({contextSnapshot.memoryTopics.length})
+                    </span>
+                    <span class="meta-label">Tokens</span>
+                    <span class="meta-value">
+                      {contextSnapshot.meta.tokenCount !== null
+                        ? contextSnapshot.meta.tokenCount.toLocaleString()
+                        : 'unavailable'}
+                    </span>
                   </div>
-                  {#each contextSnapshot.memoryTopics as topic}
-                    <div class="snapshot-memory-row">
-                      <span class="snapshot-memory-title">{topic.title}</span>
-                      <span class="snapshot-detail">{topic.slug}</span>
-                    </div>
-                  {/each}
-                  {#if contextSnapshot.memoryTopics.length === 0}
-                    <div class="snapshot-stat dim">No memory topics</div>
-                  {/if}
+                  <div class="snapshot-actions">
+                    <button
+                      class="snapshot-copy-btn"
+                      onclick={() => navigator.clipboard.writeText(contextSnapshot!.contextDump)}
+                    >Copy full context</button>
+                    <button
+                      class="snapshot-copy-btn"
+                      onclick={() => navigator.clipboard.writeText(contextSnapshot!.systemPrompt)}
+                    >Copy system prompt</button>
+                  </div>
                 </div>
 
-                <details class="snapshot-section">
-                  <summary class="snapshot-heading">System Prompt</summary>
-                  <pre class="snapshot-prompt">{contextSnapshot.systemPrompt}</pre>
-                </details>
-              {:else}
+                <pre class="snapshot-dump">{contextSnapshot.contextDump}</pre>
+              {:else if !snapshotLoading}
                 <p class="snapshot-stat dim">Click Refresh to take a snapshot</p>
               {/if}
             </div>
@@ -657,9 +758,15 @@
             <div class="debug-panel-body debug-log-body">
               {#if turn.debugEvents.length === 0}
                 <p class="snapshot-stat dim">No events yet. Send a message to see debug output.</p>
+              {:else}
+                <button class="log-clear-btn" onclick={clearDebugLog}>Clear</button>
               {/if}
               {#each turn.debugEvents as event}
-                {#if event.type === 'debug_system_prompt'}
+                {#if event.type === 'debug_turn_boundary'}
+                  <div class="log-turn-boundary">
+                    <span>Turn {new Date(event.timestamp).toLocaleTimeString()}</span>
+                  </div>
+                {:else if event.type === 'debug_system_prompt'}
                   <details class="log-entry log-system">
                     <summary>System Prompt</summary>
                     <pre>{event.prompt}</pre>
@@ -691,11 +798,26 @@
                       <pre>{JSON.stringify(event.functionCalls, null, 2)}</pre>
                     {/if}
                   </details>
+                {:else if event.type === 'debug_thought'}
+                  <details class="log-entry log-thought">
+                    <summary>
+                      <span class="log-badge thought">THK</span>
+                      Round {event.round}
+                    </summary>
+                    <pre class="log-thought-text">{event.text}</pre>
+                  </details>
                 {:else if event.type === 'debug_tool_exec'}
                   <div class="log-entry log-tool-exec">
                     <span class="log-badge tool-exec">&rarr;</span>
                     <span class="log-tool-name">{event.name}</span>
-                    <pre>{JSON.stringify(event.args, null, 2)}</pre>
+                    {#if event.name === 'generate_image' && event.args.prompt}
+                      <pre class="log-gen-prompt">{event.args.prompt}</pre>
+                      {#if event.args.reference_image_ids}
+                        <div class="log-meta" style="width:100%">refs: {(event.args.reference_image_ids as string[]).join(', ')}</div>
+                      {/if}
+                    {:else}
+                      <pre>{JSON.stringify(event.args, null, 2)}</pre>
+                    {/if}
                   </div>
                 {:else if event.type === 'debug_tool_result'}
                   <div class="log-entry log-tool-result">
@@ -1649,111 +1771,56 @@
     font-size: 0.75rem;
   }
 
+  .snapshot-meta {
+    border-bottom: 1px solid #1a1a1a;
+    padding-bottom: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+
   .snapshot-time {
     color: #666;
     font-size: 0.7rem;
-    margin-bottom: 0.75rem;
+    margin-bottom: 0.5rem;
   }
 
-  .snapshot-section {
-    margin-bottom: 0.75rem;
-    padding-bottom: 0.75rem;
-    border-bottom: 1px solid #1a1a1a;
+  .snapshot-meta-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.15rem 0.75rem;
+    margin-bottom: 0.5rem;
   }
 
-  .snapshot-heading {
-    color: #f5c542;
-    font-weight: 600;
+  .meta-label {
+    color: #888;
     font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    margin-bottom: 0.4rem;
-    cursor: default;
   }
 
-  details.snapshot-section > summary {
-    cursor: pointer;
-    list-style: none;
+  .meta-value {
+    color: #ccc;
+    font-size: 0.72rem;
   }
 
-  details.snapshot-section > summary::-webkit-details-marker {
-    display: none;
+  .snapshot-actions {
+    display: flex;
+    gap: 0.4rem;
   }
 
-  :global(details.snapshot-section > summary .snapshot-heading) {
-    cursor: pointer;
-  }
-
-  :global(details.snapshot-section > summary .snapshot-heading)::before {
-    content: '+ ';
-  }
-
-  :global(details.snapshot-section[open] > summary .snapshot-heading)::before {
-    content: '- ';
-  }
-
-  .snapshot-stat {
-    color: #bbb;
-    font-size: 0.75rem;
-    margin-bottom: 0.2rem;
+  .snapshot-copy-btn {
+    font-family: inherit;
+    font-size: 0.68rem;
+    padding: 0.15rem 0.5rem;
   }
 
   .snapshot-stat.dim, .dim {
     color: #555;
   }
 
-  .snapshot-subheading {
-    color: #888;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    margin-top: 0.35rem;
-    margin-bottom: 0.15rem;
-  }
-
-  .snapshot-detail {
-    color: #666;
-    font-size: 0.7rem;
-  }
-
-  .snapshot-image-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.35rem;
-  }
-
-  .snapshot-thumb {
-    width: 32px;
-    height: 32px;
-    object-fit: cover;
-    border-radius: 3px;
-    border: 1px solid #333;
-    flex-shrink: 0;
-  }
-
-  .snapshot-image-label {
-    color: #bbb;
-    font-size: 0.75rem;
-  }
-
-  .snapshot-memory-row {
-    margin-bottom: 0.2rem;
-  }
-
-  .snapshot-memory-title {
-    color: #bbb;
-    font-size: 0.75rem;
-  }
-
-  .snapshot-prompt {
-    margin: 0.25rem 0 0;
+  .snapshot-dump {
+    margin: 0;
     white-space: pre-wrap;
     word-break: break-word;
-    color: #999;
-    line-height: 1.4;
-    max-height: 50vh;
-    overflow-y: auto;
+    color: #aaa;
+    line-height: 1.5;
     font-size: 0.72rem;
   }
 
@@ -1762,6 +1829,30 @@
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
+  }
+
+  .log-clear-btn {
+    align-self: flex-end;
+    font-family: inherit;
+    font-size: 0.68rem;
+    padding: 0.15rem 0.5rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .log-turn-boundary {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #555;
+    font-size: 0.68rem;
+    margin: 0.25rem 0;
+  }
+
+  .log-turn-boundary::before,
+  .log-turn-boundary::after {
+    content: '';
+    flex: 1;
+    border-top: 1px dashed #333;
   }
 
   .log-entry {
@@ -1804,6 +1895,11 @@
     flex-shrink: 0;
   }
 
+  .log-badge.thought {
+    background: #1a1a30;
+    color: #8888bb;
+  }
+
   .log-badge.request {
     background: #1a2040;
     color: #6688cc;
@@ -1826,6 +1922,14 @@
 
   .log-system {
     border-left-color: #665500;
+  }
+
+  .log-thought {
+    border-left-color: #44a;
+  }
+
+  .log-thought-text {
+    color: #8888bb;
   }
 
   .log-request {
@@ -1867,6 +1971,15 @@
     color: #666;
     font-size: 0.68rem;
     margin-left: auto;
+  }
+
+  .log-gen-prompt {
+    color: #dda;
+    background: #1a1a10;
+    border: 1px solid #333020;
+    border-radius: 3px;
+    padding: 0.35rem 0.5rem;
+    width: 100%;
   }
 
   .log-subheading {

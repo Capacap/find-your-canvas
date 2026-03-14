@@ -39,7 +39,9 @@ export type OrchestratorEvent =
   | { type: 'debug_request'; round: number; parts: unknown[]; historyLength: number }
   | { type: 'debug_response'; round: number; text: string; functionCalls: unknown[] }
   | { type: 'debug_tool_exec'; name: string; args: Record<string, unknown> }
-  | { type: 'debug_tool_result'; name: string; result: unknown };
+  | { type: 'debug_tool_result'; name: string; result: unknown }
+  | { type: 'debug_thought'; round: number; text: string }
+  | { type: 'debug_turn_boundary'; timestamp: number };
 
 export type EventCallback = (event: OrchestratorEvent) => void;
 
@@ -157,14 +159,32 @@ export function buildSystemPrompt(
 
 // ── Helpers ──
 
-/** Replace binary inline data with size placeholders for debug logging. */
+/** Replace a base64 string with a size placeholder. */
+function redactBase64(data: string, mimeType?: string): string {
+  const kb = Math.ceil((data.length * 3) / 4 / 1024);
+  return `[${kb}KB ${mimeType ?? 'binary'}]`;
+}
+
+/** Replace binary data with size placeholders for debug logging. */
 function redactParts(parts: Part[]): unknown[] {
   return parts.map((p) => {
     if ('inlineData' in p && p.inlineData) {
-      const kb = Math.ceil((p.inlineData.data?.length ?? 0) / 1024);
-      return { inlineData: { mimeType: p.inlineData.mimeType, data: `[${kb}KB base64]` } };
+      return { inlineData: { mimeType: p.inlineData.mimeType, data: redactBase64(p.inlineData.data ?? '', p.inlineData.mimeType) } };
     }
     if ('functionResponse' in p && p.functionResponse) {
+      const resp = p.functionResponse.response as Record<string, unknown> | undefined;
+      if (resp) {
+        const redacted = { ...resp };
+        const thumb = redacted.thumbnail as { base64?: string; mimeType?: string } | undefined;
+        if (thumb?.base64) {
+          redacted.thumbnail = { ...thumb, base64: redactBase64(thumb.base64, thumb.mimeType) };
+        }
+        const img = redacted.image as { base64?: string; mimeType?: string } | undefined;
+        if (img?.base64) {
+          redacted.image = { ...img, base64: redactBase64(img.base64, img.mimeType) };
+        }
+        return { functionResponse: { name: p.functionResponse.name, response: redacted } };
+      }
       return { functionResponse: p.functionResponse };
     }
     return p;
@@ -565,6 +585,7 @@ async function runAgentTurnInner(
       );
 
       let roundText = '';
+      let roundThought = '';
       const debugFunctionCalls: { name: string; args: unknown }[] = [];
 
       for await (const chunk of stream) {
@@ -573,6 +594,7 @@ async function runAgentTurnInner(
           onEvent({ type: 'text_delta', text: chunk.textDelta });
         }
         if (chunk.thoughtDelta) {
+          roundThought += chunk.thoughtDelta;
           onEvent({ type: 'thought_delta', text: chunk.thoughtDelta });
         }
         if (chunk.functionCalls) {
@@ -580,6 +602,10 @@ async function runAgentTurnInner(
             debugFunctionCalls.push({ name: fc.name ?? 'unknown', args: fc.args });
           }
         }
+      }
+
+      if (roundThought) {
+        onEvent({ type: 'debug_thought', round, text: roundThought });
       }
 
       const result = getResult();
