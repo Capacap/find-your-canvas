@@ -92,6 +92,16 @@ export interface UserAttachment {
 const MAX_TOOL_ROUNDS = 10;
 
 /**
+ * Maximum function calls to execute per round. Gemini 3 models have a
+ * server-side bug (Google issue #1275) where 3+ parallel function calls
+ * in a single response can produce missing thoughtSignature parts, which
+ * corrupts the curated history and causes 400 errors on subsequent turns.
+ * Capping at 2 avoids the bug; excess calls get an error response asking
+ * the model to retry them in the next round.
+ */
+const MAX_PARALLEL_CALLS = 2;
+
+/**
  * Debug fault injection. When set to a round number (0-indexed), the
  * orchestrator throws a simulated error at the start of that round.
  * Resets to null after firing.
@@ -612,8 +622,19 @@ async function runAgentTurnInner(
       // Execute function calls and collect response parts.
       const responseParts: Part[] = [];
 
-      for (const call of result.functionCalls) {
+      for (let i = 0; i < result.functionCalls.length; i++) {
+        const call = result.functionCalls[i];
         if (ctx.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
+
+        // Defer excess calls to avoid the 3+ parallel call thoughtSignature bug.
+        if (i >= MAX_PARALLEL_CALLS) {
+          const name = call.name ?? 'unknown';
+          responseParts.push(functionResponsePart(name, call.id, {
+            error: 'Too many parallel tool calls. Please call this tool again.'
+          }));
+          onEvent({ type: 'debug_tool_exec', name, args: { _deferred: true } });
+          continue;
+        }
 
         const callArgs = (call.args ?? {}) as Record<string, unknown>;
         onEvent({ type: 'debug_tool_exec', name: call.name ?? 'unknown', args: callArgs });
