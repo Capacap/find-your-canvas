@@ -321,7 +321,8 @@ const TOOL_DECLARATIONS: FunctionDeclaration[] = [
 // ── Tool execution ──
 
 interface ToolExecResult {
-  /** Parts to send back as the function response. */
+  /** Parts to send back as the function response. Typically a single
+   *  functionResponse Part (with images nested in its `parts` field). */
   responseParts: Part[];
   /** If this tool call produced a new image, its ID. */
   imageId?: string;

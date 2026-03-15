@@ -27,7 +27,7 @@ export interface Project {
  * Chat messages (ChatMessage[]) and API history (apiHistory) are stored
  * separately. Messages are the UI-facing representation; apiHistory
  * preserves the full Gemini protocol state (tool calls, thought
- * signatures, inline thumbnails) needed to continue the session.
+ * signatures, tool-returned thumbnails) needed to continue the session.
  */
 export interface Conversation {
   id: string;
