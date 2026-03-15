@@ -4,7 +4,7 @@
  * Bridges the orchestration engine with the app store and database layer,
  * keeping the page component free of engine wiring. Owns all state related
  * to a running or recently-completed agent turn: streaming output, status,
- * errors, debug events, and retry context.
+ * errors, debug events, retry context, and turn rollback.
  */
 import {
   getAppState,
@@ -160,9 +160,10 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
   }));
 
   try {
+    const preTurnHistoryLength = ctx.apiHistory.length;
     const result = await runAgentTurn(ctx, actions, opts.text, onEvent, attachments, opts.reattachImageIds ?? []);
 
-    await ops.saveTurnResult(projectId, conversationId, result);
+    await ops.saveTurnResult(projectId, conversationId, result, preTurnHistoryLength);
 
     await refreshConversation();
     await refreshMessages();
@@ -202,4 +203,22 @@ export async function retryMessage(onImageGenerated?: (imageId: string) => void)
   errorText = '';
 
   return sendMessage({ text, reattachImageIds: imageIds, onImageGenerated });
+}
+
+/**
+ * Roll back the most recent successful turn. Deletes the last user+assistant
+ * messages, truncates apiHistory, and returns the user's text so the UI can
+ * prefill the input field. Returns null if rollback isn't possible.
+ */
+export async function rollbackTurn(): Promise<{ userText: string; userImageIds: string[] } | null> {
+  const app = getAppState();
+  if (isRunning || !app.currentConversation) return null;
+
+  const result = await ops.rollbackLastTurn(app.currentConversation.id);
+  if (!result) return null;
+
+  await refreshConversation();
+  await refreshMessages();
+
+  return result;
 }

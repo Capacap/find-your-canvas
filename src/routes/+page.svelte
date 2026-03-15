@@ -19,7 +19,7 @@
     importProject,
     deleteImage
   } from '$lib/stores/appState.svelte';
-  import { getTurnState, sendMessage, retryMessage, clearTurnError, clearDebugLog, cancelTurn } from '$lib/stores/turnState.svelte';
+  import { getTurnState, sendMessage, retryMessage, rollbackTurn, clearTurnError, clearDebugLog, cancelTurn } from '$lib/stores/turnState.svelte';
   import { debugInjectFault, buildSystemPrompt } from '$lib/engine/orchestrator';
   import { countTokens } from '$lib/engine/gemini';
   import { TEXT_MODEL } from '$lib/types/schema';
@@ -50,6 +50,7 @@
   // File attachments
   const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
   let pendingFiles = $state<File[]>([]);
+  let rollbackImageIds = $state<string[]>([]);
   let pendingFileUrls = $state<Map<File, string>>(new Map());
   let isDragging = $state(false);
   let attachInput = $state<HTMLInputElement>(null!);
@@ -153,6 +154,7 @@
 
   async function handleSelectConversation(id: string) {
     resolvedImageUrls = {};
+    rollbackImageIds = [];
     clearTurnError();
     clearDebugLog();
     contextSnapshot = null;
@@ -184,11 +186,29 @@
     }
 
     userInput = '';
-    await sendMessage({ text, files: filesToSend, onImageGenerated: resolveImageId });
+    const reattach = rollbackImageIds;
+    rollbackImageIds = [];
+    await sendMessage({ text, files: filesToSend, reattachImageIds: reattach.length > 0 ? reattach : undefined, onImageGenerated: resolveImageId });
   }
 
   async function handleRetry() {
     await retryMessage(resolveImageId);
+  }
+
+  let isRollingBack = $state(false);
+
+  async function handleRollback() {
+    if (isRollingBack) return;
+    isRollingBack = true;
+    try {
+      const result = await rollbackTurn();
+      if (result) {
+        userInput = result.userText;
+        rollbackImageIds = result.userImageIds;
+      }
+    } finally {
+      isRollingBack = false;
+    }
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -857,6 +877,12 @@
             </div>
           {/each}
 
+          {#if !turn.isRunning && !turn.errorText && app.currentConversation?.preTurnHistoryLength !== undefined && app.messages.length > 0 && app.messages[app.messages.length - 1].role === 'assistant'}
+            <div class="rollback-row">
+              <button class="rollback-btn" onclick={handleRollback} disabled={isRollingBack}>Re-roll</button>
+            </div>
+          {/if}
+
           {#if turn.streamingThought}
             <div class="message assistant">
               <div class="message-role">Thinking</div>
@@ -1500,6 +1526,27 @@
     background: #3a1a1a;
     color: #ff7777;
     border-color: #ff7777;
+  }
+
+  .rollback-row {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0 1rem;
+  }
+
+  .rollback-btn {
+    background: transparent;
+    color: #999;
+    border: 1px solid #444;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .rollback-btn:hover {
+    color: #ccc;
+    border-color: #888;
   }
 
   .chat.dragging {

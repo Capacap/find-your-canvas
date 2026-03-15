@@ -35,6 +35,9 @@ export interface Conversation {
   title: string;
   /** Gemini Content[] for API continuity. Includes tool call/response structure and thought signatures. */
   apiHistory: Content[];
+  /** Length of apiHistory before the most recent successful turn.
+   *  Undefined when no rollback is available (fresh conversation, or cleared after rollback). */
+  preTurnHistoryLength?: number;
   createdAt: number;
   updatedAt: number;
 }

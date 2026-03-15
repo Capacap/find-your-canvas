@@ -221,6 +221,10 @@ export async function listMessages(conversationId: string): Promise<ChatMessage[
 /**
  * Persist the result of an agent turn atomically: user message, assistant
  * message, and updated apiHistory in a single transaction.
+ *
+ * On successful turns, also records preTurnHistoryLength as the rollback
+ * point for the next rollbackLastTurn call. Skipped on error turns since
+ * the orchestrator already rolls apiHistory back to pre-turn state.
  */
 export async function saveTurnResult(
   projectId: string,
@@ -232,7 +236,9 @@ export async function saveTurnResult(
     assistantImageIds: string[];
     apiHistory: Conversation['apiHistory'];
     error?: string;
-  }
+  },
+  /** apiHistory.length before this turn ran. Stored on success for rollback. */
+  preTurnHistoryLength?: number
 ): Promise<void> {
   const isError = !!result.error;
   const timestamp = now();
@@ -260,9 +266,86 @@ export async function saveTurnResult(
         createdAt: timestamp + 1 // +1ms ensures assistant sorts after user in createdAt order
       });
     }
-    await db.conversations.update(conversationId, { apiHistory: result.apiHistory, updatedAt: timestamp });
+    await db.conversations.update(conversationId, {
+      apiHistory: result.apiHistory,
+      updatedAt: timestamp,
+      ...(!isError && preTurnHistoryLength !== undefined ? { preTurnHistoryLength } : {})
+    });
     await db.projects.update(projectId, { updatedAt: timestamp });
   });
+}
+
+/**
+ * Roll back the most recent successful turn. Cleans up any leftover
+ * error-turn messages, then deletes the last user+assistant messages,
+ * truncates apiHistory to preTurnHistoryLength, clears dangling
+ * messageId references on images, and returns the user's text and
+ * imageIds so the UI can prefill the input.
+ *
+ * Returns null if rollback isn't possible (no preTurnHistoryLength recorded).
+ * Single-level undo: clears preTurnHistoryLength after rollback.
+ */
+export async function rollbackLastTurn(
+  conversationId: string
+): Promise<{ userText: string; userImageIds: string[] } | null> {
+  let userText = '';
+  let userImageIds: string[] = [];
+  let didRollback = false;
+
+  await db.transaction('rw', [db.messages, db.conversations, db.projects, db.imageMeta], async () => {
+    const convo = await db.conversations.get(conversationId);
+    if (!convo || convo.preTurnHistoryLength === undefined) return;
+
+    // Delete any leftover error-turn messages first so the backward
+    // walk hits the last *successful* turn, not a failed follow-up.
+    await db.messages
+      .where('conversationId')
+      .equals(conversationId)
+      .filter((m) => m.errorTurn === true)
+      .delete();
+
+    const messages = await db.messages
+      .where('conversationId')
+      .equals(conversationId)
+      .sortBy('createdAt');
+
+    const toDelete: string[] = [];
+
+    // Walk backwards: expect assistant then user from the same turn.
+    for (let i = messages.length - 1; i >= 0 && toDelete.length < 2; i--) {
+      const msg = messages[i];
+      if (toDelete.length === 0 && msg.role === 'assistant') {
+        toDelete.push(msg.id);
+      } else if (toDelete.length === 1 && msg.role === 'user') {
+        userText = msg.text;
+        userImageIds = msg.imageIds;
+        toDelete.push(msg.id);
+      } else {
+        break;
+      }
+    }
+
+    if (toDelete.length > 0) {
+      await db.messages.bulkDelete(toDelete);
+
+      // Clear dangling messageId references on images (same pattern as deleteConversation).
+      const orphanedImages = await db.imageMeta.where('messageId').anyOf(toDelete).toArray();
+      for (const img of orphanedImages) {
+        await db.imageMeta.update(img.id, { messageId: undefined });
+      }
+    }
+
+    const truncatedHistory = convo.apiHistory.slice(0, convo.preTurnHistoryLength);
+    await db.conversations.update(conversationId, {
+      apiHistory: truncatedHistory,
+      preTurnHistoryLength: undefined,
+      updatedAt: now()
+    });
+    await db.projects.update(convo.projectId, { updatedAt: now() });
+    didRollback = true;
+  });
+
+  return didRollback ? { userText, userImageIds } : null;
 }
 
 /** Delete all messages from a failed turn. Called at the start of the next turn. */
