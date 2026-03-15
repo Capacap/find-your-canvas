@@ -319,15 +319,7 @@
     if (part.functionResponse) {
       const name = part.functionResponse.name ?? 'unknown';
       const resp = part.functionResponse.response ?? {};
-      const redacted = { ...resp };
-      for (const key of ['thumbnail', 'image'] as const) {
-        const val = redacted[key] as { base64?: string; mimeType?: string } | undefined;
-        if (val?.base64) {
-          const kb = Math.ceil((val.base64.length * 3) / 4 / 1024);
-          redacted[key] = { mimeType: val.mimeType, data: `[${kb} KB]` };
-        }
-      }
-      return `[Tool Result: ${name}]\n${JSON.stringify(redacted, null, 2)}`;
+      return `[Tool Result: ${name}]\n${JSON.stringify(resp, null, 2)}`;
     }
     if (part.inlineData?.data) {
       const kb = Math.ceil((part.inlineData.data.length * 3) / 4 / 1024);
@@ -349,15 +341,6 @@
     if (part.inlineData?.data) {
       count++;
       kb += Math.ceil((part.inlineData.data.length * 3) / 4 / 1024);
-    }
-    if (part.functionResponse?.response) {
-      const resp = part.functionResponse.response;
-      for (const key of ['thumbnail', 'image']) {
-        if (resp[key]?.base64) {
-          count++;
-          kb += Math.ceil((resp[key].base64.length * 3) / 4 / 1024);
-        }
-      }
     }
     return { count, kb };
   }

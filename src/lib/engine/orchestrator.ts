@@ -172,20 +172,7 @@ function redactParts(parts: Part[]): unknown[] {
       return { inlineData: { mimeType: p.inlineData.mimeType, data: redactBase64(p.inlineData.data ?? '', p.inlineData.mimeType) } };
     }
     if ('functionResponse' in p && p.functionResponse) {
-      const resp = p.functionResponse.response as Record<string, unknown> | undefined;
-      if (resp) {
-        const redacted = { ...resp };
-        const thumb = redacted.thumbnail as { base64?: string; mimeType?: string } | undefined;
-        if (thumb?.base64) {
-          redacted.thumbnail = { ...thumb, base64: redactBase64(thumb.base64, thumb.mimeType) };
-        }
-        const img = redacted.image as { base64?: string; mimeType?: string } | undefined;
-        if (img?.base64) {
-          redacted.image = { ...img, base64: redactBase64(img.base64, img.mimeType) };
-        }
-        return { functionResponse: { name: p.functionResponse.name, response: redacted } };
-      }
-      return { functionResponse: p.functionResponse };
+      return { functionResponse: { name: p.functionResponse.name, id: p.functionResponse.id, response: p.functionResponse.response } };
     }
     return p;
   });
@@ -326,20 +313,20 @@ interface ToolExecResult {
 
 type ToolArgs = Record<string, unknown>;
 
-/** Build a functionResponse part. */
-function functionResponsePart(toolName: string, response: Record<string, unknown>): Part {
-  return { functionResponse: { name: toolName, response } };
+/** Build a functionResponse part, preserving the call id for round-tripping. */
+function functionResponsePart(toolName: string, callId: string | undefined, response: Record<string, unknown>): Part {
+  return { functionResponse: { name: toolName, id: callId, response } };
 }
 
 /** Build a ToolExecResult for an error, emitting an event. */
-function toolErrorResult(toolName: string, err: unknown, label: string, onEvent: EventCallback): ToolExecResult {
+function toolErrorResult(toolName: string, callId: string | undefined, err: unknown, label: string, onEvent: EventCallback): ToolExecResult {
   const msg = err instanceof Error ? err.message : String(err);
   onEvent({ type: 'error', message: `${label}: ${msg}` });
-  return { responseParts: [functionResponsePart(toolName, { error: msg })] };
+  return { responseParts: [functionResponsePart(toolName, callId, { error: msg })] };
 }
 
 async function handleGenerateImage(
-  toolName: string, args: ToolArgs, ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
+  toolName: string, callId: string | undefined, args: ToolArgs, ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
 ): Promise<ToolExecResult> {
   const label = (args.label as string) || 'generated_image';
   const prompt = args.prompt as string;
@@ -368,24 +355,21 @@ async function handleGenerateImage(
 
     onEvent({ type: 'image_complete', imageId: stored.id, label });
 
-    const response: Record<string, unknown> = {
-      output: `Image generated: [image:${stored.id}] "${label}"`
-    };
+    const parts: Part[] = [
+      functionResponsePart(toolName, callId, { output: `Image generated: [image:${stored.id}] "${label}"` })
+    ];
     const thumb = await actions.getImageThumbnail(stored.id);
     if (thumb) {
-      response.thumbnail = { base64: thumb.base64, mimeType: thumb.mimeType };
+      parts.push({ inlineData: { data: thumb.base64, mimeType: thumb.mimeType } });
     }
-    return {
-      responseParts: [functionResponsePart(toolName, response)],
-      imageId: stored.id
-    };
+    return { responseParts: parts, imageId: stored.id };
   } catch (err) {
-    return toolErrorResult(toolName, err, 'Image generation failed', onEvent);
+    return toolErrorResult(toolName, callId, err, 'Image generation failed', onEvent);
   }
 }
 
 async function handleViewImage(
-  toolName: string, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
+  toolName: string, callId: string | undefined, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
 ): Promise<ToolExecResult> {
   const imageId = args.image_id as string;
   const reason = args.reason as string | undefined;
@@ -395,24 +379,22 @@ async function handleViewImage(
   try {
     const thumb = await actions.getImageThumbnail(imageId);
     if (!thumb) {
-      return { responseParts: [functionResponsePart(toolName, { error: `Image not found: ${imageId}` })] };
+      return { responseParts: [functionResponsePart(toolName, callId, { error: `Image not found: ${imageId}` })] };
     }
 
     return {
       responseParts: [
-        functionResponsePart(toolName, {
-          output: `Showing image ${imageId}`,
-          image: { base64: thumb.base64, mimeType: thumb.mimeType }
-        })
+        functionResponsePart(toolName, callId, { output: `Showing image ${imageId}` }),
+        { inlineData: { data: thumb.base64, mimeType: thumb.mimeType } }
       ]
     };
   } catch (err) {
-    return toolErrorResult(toolName, err, 'Failed to view image', onEvent);
+    return toolErrorResult(toolName, callId, err, 'Failed to view image', onEvent);
   }
 }
 
 async function handleReadMemory(
-  toolName: string, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
+  toolName: string, callId: string | undefined, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
 ): Promise<ToolExecResult> {
   const slug = args.slug as string;
 
@@ -424,21 +406,21 @@ async function handleReadMemory(
       const hint = available
         ? `Topic "${slug}" not found. Available topics: ${available}`
         : `Topic "${slug}" not found. No topics exist yet. Use update_memory to create one.`;
-      return { responseParts: [functionResponsePart(toolName, { error: hint })] };
+      return { responseParts: [functionResponsePart(toolName, callId, { error: hint })] };
     }
 
     return {
       responseParts: [
-        functionResponsePart(toolName, { slug: memory.slug, title: memory.title, content: memory.content })
+        functionResponsePart(toolName, callId, { slug: memory.slug, title: memory.title, content: memory.content })
       ]
     };
   } catch (err) {
-    return toolErrorResult(toolName, err, 'Failed to read memory', onEvent);
+    return toolErrorResult(toolName, callId, err, 'Failed to read memory', onEvent);
   }
 }
 
 async function handleUpdateMemory(
-  toolName: string, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
+  toolName: string, callId: string | undefined, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
 ): Promise<ToolExecResult> {
   const slug = args.slug as string;
   const title = args.title as string;
@@ -450,14 +432,14 @@ async function handleUpdateMemory(
     onEvent({ type: 'memory_updated', slug });
 
     const verb = content.trim() ? 'updated' : 'deleted';
-    return { responseParts: [functionResponsePart(toolName, { output: `Memory topic "${slug}" ${verb}.` })] };
+    return { responseParts: [functionResponsePart(toolName, callId, { output: `Memory topic "${slug}" ${verb}.` })] };
   } catch (err) {
-    return toolErrorResult(toolName, err, 'Failed to update memory', onEvent);
+    return toolErrorResult(toolName, callId, err, 'Failed to update memory', onEvent);
   }
 }
 
 type ToolHandler = (
-  toolName: string, args: ToolArgs, ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
+  toolName: string, callId: string | undefined, args: ToolArgs, ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
 ) => Promise<ToolExecResult>;
 
 const toolHandlers: Record<string, ToolHandler> = {
@@ -474,14 +456,15 @@ async function executeToolCall(
   onEvent: EventCallback
 ): Promise<ToolExecResult> {
   const name = call.name ?? 'unknown';
+  const id = call.id;
   const args = call.args ?? {};
   const handler = toolHandlers[name];
 
   if (!handler) {
-    return { responseParts: [functionResponsePart(name, { error: `Unknown tool: ${name}` })] };
+    return { responseParts: [functionResponsePart(name, id, { error: `Unknown tool: ${name}` })] };
   }
 
-  return handler(name, args, ctx, actions, onEvent);
+  return handler(name, id, args, ctx, actions, onEvent);
 }
 
 // ── Main orchestration loop ──
