@@ -143,7 +143,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
       opts.onImageGenerated?.(event.imageId);
       statusText = `Generated: ${event.label}`;
     }
-    else if (event.type === 'image_viewing') statusText = 'Viewing image...';
+    else if (event.type === 'image_viewing') statusText = `Viewing ${event.imageIds.length} image(s)...`;
     else if (event.type === 'memory_updated') {
       refreshAgentMemories();
       statusText = `Memory updated: ${event.slug}`;

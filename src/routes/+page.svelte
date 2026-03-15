@@ -319,7 +319,10 @@
     if (part.functionResponse) {
       const name = part.functionResponse.name ?? 'unknown';
       const resp = part.functionResponse.response ?? {};
-      return `[Tool Result: ${name}]\n${JSON.stringify(resp, null, 2)}`;
+      const nested = part.functionResponse.parts ?? [];
+      const imgCount = nested.filter((p: any) => p.inlineData?.data).length;
+      const suffix = imgCount > 0 ? ` (+${imgCount} image${imgCount > 1 ? 's' : ''})` : '';
+      return `[Tool Result: ${name}${suffix}]\n${JSON.stringify(resp, null, 2)}`;
     }
     if (part.inlineData?.data) {
       const kb = Math.ceil((part.inlineData.data.length * 3) / 4 / 1024);
@@ -341,6 +344,13 @@
     if (part.inlineData?.data) {
       count++;
       kb += Math.ceil((part.inlineData.data.length * 3) / 4 / 1024);
+    }
+    // Count images nested in functionResponse.parts (Gemini 3 pattern)
+    for (const np of (part.functionResponse?.parts ?? [])) {
+      if (np.inlineData?.data) {
+        count++;
+        kb += Math.ceil((np.inlineData.data.length * 3) / 4 / 1024);
+      }
     }
     return { count, kb };
   }

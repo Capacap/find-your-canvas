@@ -31,7 +31,7 @@ export type OrchestratorEvent =
   | { type: 'status'; text: string }
   | { type: 'image_generating'; label: string }
   | { type: 'image_complete'; imageId: string; label: string }
-  | { type: 'image_viewing'; imageId: string; reason?: string }
+  | { type: 'image_viewing'; imageIds: string[]; reason?: string }
   | { type: 'memory_updated'; slug: string }
   | { type: 'error'; message: string }
   | { type: 'done'; assistantText: string; imageIds: string[] }
@@ -133,7 +133,7 @@ function buildImageIndex(images: ImageMeta[]): string {
 
   if (userImages.length > 0) {
     lines.push('## Reference Images (uploaded by user)');
-    lines.push('Use view_image to examine reference material the user has provided.', '');
+    lines.push('Use view_images to examine reference material the user has provided.', '');
     for (const img of userImages) {
       lines.push(`- **${img.label}** (id: ${img.id})`);
     }
@@ -142,7 +142,7 @@ function buildImageIndex(images: ImageMeta[]): string {
 
   if (generatedImages.length > 0) {
     lines.push('## Generated Images');
-    lines.push('Use view_image to review previous generations.', '');
+    lines.push('Use view_images to review previous generations.', '');
     for (const img of generatedImages) {
       const genCtx = img.generationContext;
       const desc = genCtx
@@ -182,7 +182,12 @@ function redactParts(parts: Part[]): unknown[] {
       return { inlineData: { mimeType: p.inlineData.mimeType, data: redactBase64(p.inlineData.data ?? '', p.inlineData.mimeType) } };
     }
     if ('functionResponse' in p && p.functionResponse) {
-      return { functionResponse: { name: p.functionResponse.name, id: p.functionResponse.id, response: p.functionResponse.response } };
+      const fr = p.functionResponse as Record<string, unknown>;
+      const redacted: Record<string, unknown> = { name: p.functionResponse.name, id: p.functionResponse.id, response: p.functionResponse.response };
+      if (Array.isArray(fr.parts)) {
+        redacted.parts = redactParts(fr.parts as Part[]);
+      }
+      return { functionResponse: redacted };
     }
     return p;
   });
@@ -249,22 +254,23 @@ const TOOL_DECLARATIONS: FunctionDeclaration[] = [
     }
   },
   {
-    name: 'view_image',
+    name: 'view_images',
     description:
-      'View a project image by its ID. Returns the image so you can see its contents. Use this when you need to reference, compare, or iterate on a previous image.',
+      'View one or more project images by ID. Returns the images so you can see their contents. Use this when you need to reference, compare, or iterate on previous images. Batch multiple IDs into a single call rather than calling separately.',
     parameters: {
       type: Type.OBJECT,
       properties: {
-        image_id: {
-          type: Type.STRING,
-          description: 'The ID of the image to view (from the project images index).'
+        image_ids: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: 'IDs of the images to view (from the project images index). Max 6.'
         },
         reason: {
           type: Type.STRING,
-          description: 'Brief note on why you need to see this image (helps the user follow your thinking).'
+          description: 'Brief note on why you need to see these images (helps the user follow your thinking).'
         }
       },
-      required: ['image_id']
+      required: ['image_ids']
     }
   },
   {
@@ -323,9 +329,20 @@ interface ToolExecResult {
 
 type ToolArgs = Record<string, unknown>;
 
-/** Build a functionResponse part, preserving the call id for round-tripping. */
-function functionResponsePart(toolName: string, callId: string | undefined, response: Record<string, unknown>): Part {
-  return { functionResponse: { name: toolName, id: callId, response } };
+/** Build a functionResponse part, preserving the call id for round-tripping.
+ *  Gemini 3 supports nested `parts` on functionResponse for multimodal content
+ *  (e.g. images). This avoids the junk-text bug caused by sibling inlineData parts. */
+function functionResponsePart(
+  toolName: string,
+  callId: string | undefined,
+  response: Record<string, unknown>,
+  nestedParts?: Part[]
+): Part {
+  const fr: Part = { functionResponse: { name: toolName, id: callId, response } };
+  if (nestedParts && nestedParts.length > 0) {
+    (fr.functionResponse as Record<string, unknown>).parts = nestedParts;
+  }
+  return fr;
 }
 
 /** Build a ToolExecResult for an error, emitting an event. */
@@ -365,41 +382,64 @@ async function handleGenerateImage(
 
     onEvent({ type: 'image_complete', imageId: stored.id, label });
 
-    const parts: Part[] = [
-      functionResponsePart(toolName, callId, { output: `Image generated: [image:${stored.id}] "${label}"` })
-    ];
     const thumb = await actions.getImageThumbnail(stored.id);
-    if (thumb) {
-      parts.push({ inlineData: { data: thumb.base64, mimeType: thumb.mimeType } });
-    }
-    return { responseParts: parts, imageId: stored.id };
+    const imageParts = thumb
+      ? [{ inlineData: { data: thumb.base64, mimeType: thumb.mimeType } }]
+      : undefined;
+    return {
+      responseParts: [
+        functionResponsePart(toolName, callId, { output: `Image generated: [image:${stored.id}] "${label}"` }, imageParts)
+      ],
+      imageId: stored.id
+    };
   } catch (err) {
     return toolErrorResult(toolName, callId, err, 'Image generation failed', onEvent);
   }
 }
 
-async function handleViewImage(
+const MAX_VIEW_IMAGES = 6;
+
+async function handleViewImages(
   toolName: string, callId: string | undefined, args: ToolArgs, _ctx: TurnContext, actions: TurnActions, onEvent: EventCallback
 ): Promise<ToolExecResult> {
-  const imageId = args.image_id as string;
+  const imageIds = ((args.image_ids as string[]) ?? []).slice(0, MAX_VIEW_IMAGES);
   const reason = args.reason as string | undefined;
 
-  onEvent({ type: 'image_viewing', imageId, reason });
+  if (imageIds.length === 0) {
+    return { responseParts: [functionResponsePart(toolName, callId, { error: 'No image IDs provided.' })] };
+  }
+
+  onEvent({ type: 'image_viewing', imageIds, reason });
 
   try {
-    const thumb = await actions.getImageThumbnail(imageId);
-    if (!thumb) {
-      return { responseParts: [functionResponsePart(toolName, callId, { error: `Image not found: ${imageId}` })] };
+    const imageParts: Part[] = [];
+    const outputLines: string[] = [];
+    const notFound: string[] = [];
+
+    for (const imageId of imageIds) {
+      const thumb = await actions.getImageThumbnail(imageId);
+      if (!thumb) {
+        notFound.push(imageId);
+        continue;
+      }
+      outputLines.push(imageId);
+      imageParts.push({ inlineData: { data: thumb.base64, mimeType: thumb.mimeType } });
+    }
+
+    if (imageParts.length === 0) {
+      return { responseParts: [functionResponsePart(toolName, callId, { error: `Images not found: ${notFound.join(', ')}` })] };
+    }
+
+    let output = `Showing ${imageParts.length} image(s) in order: ${outputLines.join(', ')}`;
+    if (notFound.length > 0) {
+      output += `. Not found: ${notFound.join(', ')}`;
     }
 
     return {
-      responseParts: [
-        functionResponsePart(toolName, callId, { output: `Showing image ${imageId}` }),
-        { inlineData: { data: thumb.base64, mimeType: thumb.mimeType } }
-      ]
+      responseParts: [functionResponsePart(toolName, callId, { output }, imageParts)]
     };
   } catch (err) {
-    return toolErrorResult(toolName, callId, err, 'Failed to view image', onEvent);
+    return toolErrorResult(toolName, callId, err, 'Failed to view images', onEvent);
   }
 }
 
@@ -454,7 +494,7 @@ type ToolHandler = (
 
 const toolHandlers: Record<string, ToolHandler> = {
   generate_image: handleGenerateImage,
-  view_image: handleViewImage,
+  view_images: handleViewImages,
   read_memory: handleReadMemory,
   update_memory: handleUpdateMemory,
 };
