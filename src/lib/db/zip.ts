@@ -24,7 +24,8 @@ import type {
   ChatMessage,
   ImageMeta,
   ImageBlob,
-  AgentMemory
+  AgentMemory,
+  AgentSession
 } from '$lib/types/schema';
 
 interface ExportManifest {
@@ -34,6 +35,7 @@ interface ExportManifest {
   conversations: Conversation[];
   messages: ChatMessage[];
   agentMemories: AgentMemory[];
+  agentSessions: AgentSession[];
 }
 
 interface ImageManifestEntry {
@@ -69,7 +71,8 @@ export async function exportProject(projectId: string): Promise<Blob> {
     project: data.project,
     conversations: data.conversations,
     messages: data.messages,
-    agentMemories: data.agentMemories
+    agentMemories: data.agentMemories,
+    agentSessions: data.agentSessions
   };
 
   // Yield zip entries one at a time via async generator so only one
@@ -126,14 +129,15 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
     ? JSON.parse(await imageIndexFile.async('text'))
     : [];
 
-  // Write project, conversations, messages, and memories first (no images).
+  // Write project, conversations, messages, memories, and sessions first (no images).
   await importProjectData({
     project: manifest.project,
     conversations: manifest.conversations,
     messages: manifest.messages,
     imageMeta: [],
     imageBlobs: [],
-    agentMemories: manifest.agentMemories
+    agentMemories: manifest.agentMemories,
+    agentSessions: manifest.agentSessions
   });
 
   // Process and flush images in batches to avoid holding all blobs in memory.

@@ -6,7 +6,8 @@ import type {
   ImageMeta,
   ImageBlob,
   Settings,
-  AgentMemory
+  AgentMemory,
+  AgentSession
 } from '$lib/types/schema';
 
 class BananaDB extends Dexie {
@@ -16,6 +17,7 @@ class BananaDB extends Dexie {
   imageMeta!: EntityTable<ImageMeta, 'id'>;
   imageBlobs!: EntityTable<ImageBlob, 'id'>;
   agentMemories!: EntityTable<AgentMemory, 'id'>;
+  agentSessions!: EntityTable<AgentSession, 'id'>;
   settings!: EntityTable<Settings, 'id'>;
 
   constructor() {
@@ -28,6 +30,7 @@ class BananaDB extends Dexie {
       imageMeta: 'id, projectId, messageId',
       imageBlobs: 'id',
       agentMemories: 'id, projectId, [projectId+slug]',
+      agentSessions: 'id, conversationId, [conversationId+agentType]',
       settings: 'id'
     });
   }

@@ -14,8 +14,10 @@ import type {
   ImageBlob,
   Settings,
   ImageSource,
-  AgentMemory
+  AgentMemory,
+  AgentSession
 } from '$lib/types/schema';
+import type { Content } from '@google/genai';
 
 // ── Helpers ──
 
@@ -70,7 +72,7 @@ export async function updateProject(
 }
 
 export async function deleteProject(id: string): Promise<void> {
-  await db.transaction('rw', [db.projects, db.conversations, db.messages, db.imageMeta, db.imageBlobs, db.agentMemories], async () => {
+  await db.transaction('rw', [db.projects, db.conversations, db.messages, db.imageMeta, db.imageBlobs, db.agentMemories, db.agentSessions], async () => {
     const conversationIds = await db.conversations
       .where('projectId')
       .equals(id)
@@ -78,6 +80,10 @@ export async function deleteProject(id: string): Promise<void> {
 
     if (conversationIds.length > 0) {
       await db.messages
+        .where('conversationId')
+        .anyOf(conversationIds)
+        .delete();
+      await db.agentSessions
         .where('conversationId')
         .anyOf(conversationIds)
         .delete();
@@ -158,7 +164,6 @@ export async function createConversation(projectId: string, title: string): Prom
     id: generateId(),
     projectId,
     title,
-    apiHistory: [],
     createdAt: timestamp,
     updatedAt: timestamp
   };
@@ -189,7 +194,7 @@ export async function updateConversation(
 }
 
 export async function deleteConversation(id: string): Promise<void> {
-  await db.transaction('rw', [db.conversations, db.messages, db.imageMeta, db.projects], async () => {
+  await db.transaction('rw', [db.conversations, db.messages, db.imageMeta, db.agentSessions, db.projects], async () => {
     const convo = await db.conversations.get(id);
     const messageIds = await db.messages.where('conversationId').equals(id).primaryKeys();
     await db.messages.where('conversationId').equals(id).delete();
@@ -202,11 +207,57 @@ export async function deleteConversation(id: string): Promise<void> {
       }
     }
 
+    await db.agentSessions.where('conversationId').equals(id).delete();
     await db.conversations.delete(id);
     if (convo) {
       await db.projects.update(convo.projectId, { updatedAt: now() });
     }
   });
+}
+
+// ── Agent Sessions ──
+
+/** Get the orchestrator session for a conversation, or null if none exists yet. */
+export async function getOrchestratorSession(conversationId: string): Promise<AgentSession | null> {
+  const session = await db.agentSessions
+    .where('[conversationId+agentType]')
+    .equals([conversationId, 'orchestrator'])
+    .first();
+  return session ?? null;
+}
+
+/** Create a new agent session. */
+export async function createAgentSession(
+  conversationId: string,
+  agentType: AgentSession['agentType'],
+  opts?: { dispatchId?: string }
+): Promise<AgentSession> {
+  const timestamp = now();
+  const session: AgentSession = {
+    id: generateId(),
+    conversationId,
+    agentType,
+    dispatchId: opts?.dispatchId,
+    systemPrompt: '',
+    history: [],
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+  await db.agentSessions.add(session);
+  return session;
+}
+
+/** Get an agent session by ID. */
+export async function getAgentSession(id: string): Promise<AgentSession | undefined> {
+  return db.agentSessions.get(id);
+}
+
+/** List all agent sessions for a conversation. */
+export async function listAgentSessions(conversationId: string): Promise<AgentSession[]> {
+  return db.agentSessions
+    .where('conversationId')
+    .equals(conversationId)
+    .toArray();
 }
 
 // ── Messages ──
@@ -220,21 +271,23 @@ export async function listMessages(conversationId: string): Promise<ChatMessage[
 
 /**
  * Persist the result of an agent turn atomically: user message, assistant
- * message, and updated apiHistory in a single transaction.
+ * message, and updated session state in a single transaction.
  *
  * On successful turns, also records preTurnHistoryLength as the rollback
  * point for the next rollbackLastTurn call. Skipped on error turns since
- * the orchestrator already rolls apiHistory back to pre-turn state.
+ * the orchestrator already rolls history back to pre-turn state.
  */
 export async function saveTurnResult(
   projectId: string,
   conversationId: string,
+  sessionId: string,
   result: {
     userText: string;
     userImageIds: string[];
     assistantText: string;
     assistantImageIds: string[];
-    apiHistory: Conversation['apiHistory'];
+    apiHistory: Content[];
+    systemPrompt: string;
     error?: string;
   },
   /** apiHistory.length before this turn ran. Stored on success for rollback. */
@@ -243,7 +296,7 @@ export async function saveTurnResult(
   const isError = !!result.error;
   const timestamp = now();
 
-  await db.transaction('rw', [db.messages, db.conversations, db.projects], async () => {
+  await db.transaction('rw', [db.messages, db.conversations, db.agentSessions, db.projects], async () => {
     if (result.userText) {
       await db.messages.add({
         id: generateId(),
@@ -266,11 +319,13 @@ export async function saveTurnResult(
         createdAt: timestamp + 1 // +1ms ensures assistant sorts after user in createdAt order
       });
     }
-    await db.conversations.update(conversationId, {
-      apiHistory: result.apiHistory,
+    await db.agentSessions.update(sessionId, {
+      history: result.apiHistory,
+      systemPrompt: result.systemPrompt,
       updatedAt: timestamp,
       ...(!isError && preTurnHistoryLength !== undefined ? { preTurnHistoryLength } : {})
     });
+    await db.conversations.update(conversationId, { updatedAt: timestamp });
     await db.projects.update(projectId, { updatedAt: timestamp });
   });
 }
@@ -278,23 +333,27 @@ export async function saveTurnResult(
 /**
  * Roll back the most recent successful turn. Cleans up any leftover
  * error-turn messages, then deletes the last user+assistant messages,
- * truncates apiHistory to preTurnHistoryLength, clears dangling
- * messageId references on images, and returns the user's text and
- * imageIds so the UI can prefill the input.
+ * truncates the orchestrator session's history to preTurnHistoryLength,
+ * clears dangling messageId references on images, and returns the user's
+ * text and imageIds so the UI can prefill the input.
  *
  * Returns null if rollback isn't possible (no preTurnHistoryLength recorded).
  * Single-level undo: clears preTurnHistoryLength after rollback.
  */
 export async function rollbackLastTurn(
-  conversationId: string
+  conversationId: string,
+  sessionId: string
 ): Promise<{ userText: string; userImageIds: string[] } | null> {
   let userText = '';
   let userImageIds: string[] = [];
   let didRollback = false;
 
-  await db.transaction('rw', [db.messages, db.conversations, db.projects, db.imageMeta], async () => {
+  await db.transaction('rw', [db.messages, db.conversations, db.agentSessions, db.projects, db.imageMeta], async () => {
+    const session = await db.agentSessions.get(sessionId);
+    if (!session || session.preTurnHistoryLength === undefined) return;
+
     const convo = await db.conversations.get(conversationId);
-    if (!convo || convo.preTurnHistoryLength === undefined) return;
+    if (!convo) return;
 
     // Delete any leftover error-turn messages first so the backward
     // walk hits the last *successful* turn, not a failed follow-up.
@@ -335,12 +394,13 @@ export async function rollbackLastTurn(
       }
     }
 
-    const truncatedHistory = convo.apiHistory.slice(0, convo.preTurnHistoryLength);
-    await db.conversations.update(conversationId, {
-      apiHistory: truncatedHistory,
+    const truncatedHistory = session.history.slice(0, session.preTurnHistoryLength);
+    await db.agentSessions.update(sessionId, {
+      history: truncatedHistory,
       preTurnHistoryLength: undefined,
       updatedAt: now()
     });
+    await db.conversations.update(conversationId, { updatedAt: now() });
     await db.projects.update(convo.projectId, { updatedAt: now() });
     didRollback = true;
   });
@@ -442,6 +502,7 @@ export interface ProjectExportData {
   messages: ChatMessage[];
   imageMeta: ImageMeta[];
   agentMemories: AgentMemory[];
+  agentSessions: AgentSession[];
 }
 
 export async function getProjectExportData(projectId: string): Promise<ProjectExportData> {
@@ -460,10 +521,15 @@ export async function getProjectExportData(projectId: string): Promise<ProjectEx
         .filter((m) => !m.errorTurn)
       : [];
 
+  const agentSessions =
+    conversationIds.length > 0
+      ? await db.agentSessions.where('conversationId').anyOf(conversationIds).toArray()
+      : [];
+
   const imageMeta = await db.imageMeta.where('projectId').equals(projectId).toArray();
   const agentMemories = await db.agentMemories.where('projectId').equals(projectId).toArray();
 
-  return { project, conversations, messages, imageMeta, agentMemories };
+  return { project, conversations, messages, imageMeta, agentMemories, agentSessions };
 }
 
 export interface ProjectImportData extends ProjectExportData {
@@ -473,7 +539,7 @@ export interface ProjectImportData extends ProjectExportData {
 export async function importProjectData(data: ProjectImportData): Promise<void> {
   await db.transaction(
     'rw',
-    [db.projects, db.conversations, db.messages, db.imageMeta, db.imageBlobs, db.agentMemories],
+    [db.projects, db.conversations, db.messages, db.imageMeta, db.imageBlobs, db.agentMemories, db.agentSessions],
     async () => {
       await db.projects.put(data.project);
       await db.conversations.bulkPut(data.conversations);
@@ -482,6 +548,9 @@ export async function importProjectData(data: ProjectImportData): Promise<void> 
       await db.imageBlobs.bulkPut(data.imageBlobs);
       if (data.agentMemories.length > 0) {
         await db.agentMemories.bulkPut(data.agentMemories);
+      }
+      if (data.agentSessions.length > 0) {
+        await db.agentSessions.bulkPut(data.agentSessions);
       }
     }
   );

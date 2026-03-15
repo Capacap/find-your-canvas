@@ -11,7 +11,8 @@ import {
   refreshMessages,
   refreshProjectImages,
   refreshAgentMemories,
-  refreshConversation
+  refreshConversation,
+  refreshOrchestratorSession
 } from './appState.svelte';
 import {
   runAgentTurn,
@@ -92,6 +93,12 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
   const projectId = app.currentProject.id;
   const conversationId = app.currentConversation.id;
 
+  // Ensure an orchestrator session exists for this conversation.
+  let session = app.orchestratorSession;
+  if (!session) {
+    session = await ops.createAgentSession(conversationId, 'orchestrator');
+  }
+
   abortController = new AbortController();
   isRunning = true;
   if (debugEvents.length > 0) {
@@ -113,7 +120,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
     projectName: app.currentProject.name,
     agentMemories: $state.snapshot(app.agentMemories),
     projectImages: $state.snapshot(app.projectImages),
-    apiHistory: $state.snapshot(app.currentConversation.apiHistory ?? []),
+    apiHistory: $state.snapshot(session.history),
     signal: abortController.signal
   };
 
@@ -163,11 +170,15 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
     const preTurnHistoryLength = ctx.apiHistory.length;
     const result = await runAgentTurn(ctx, actions, opts.text, onEvent, attachments, opts.reattachImageIds ?? []);
 
-    await ops.saveTurnResult(projectId, conversationId, result, preTurnHistoryLength);
+    await ops.saveTurnResult(projectId, conversationId, session.id, result, preTurnHistoryLength);
 
-    await refreshConversation();
-    await refreshMessages();
-    await refreshProjectImages();
+    // Only refresh UI state if the user hasn't navigated away during the turn.
+    if (getAppState().currentConversation?.id === conversationId) {
+      await refreshConversation();
+      await refreshOrchestratorSession();
+      await refreshMessages();
+      await refreshProjectImages();
+    }
     streamingText = '';
     streamingThought = '';
 
@@ -207,17 +218,19 @@ export async function retryMessage(onImageGenerated?: (imageId: string) => void)
 
 /**
  * Roll back the most recent successful turn. Deletes the last user+assistant
- * messages, truncates apiHistory, and returns the user's text so the UI can
- * prefill the input field. Returns null if rollback isn't possible.
+ * messages, truncates the orchestrator session's history, and returns the
+ * user's text so the UI can prefill the input field. Returns null if
+ * rollback isn't possible (no session or no preTurnHistoryLength).
  */
 export async function rollbackTurn(): Promise<{ userText: string; userImageIds: string[] } | null> {
   const app = getAppState();
-  if (isRunning || !app.currentConversation) return null;
+  if (isRunning || !app.currentConversation || !app.orchestratorSession) return null;
 
-  const result = await ops.rollbackLastTurn(app.currentConversation.id);
+  const result = await ops.rollbackLastTurn(app.currentConversation.id, app.orchestratorSession.id);
   if (!result) return null;
 
   await refreshConversation();
+  await refreshOrchestratorSession();
   await refreshMessages();
 
   return result;

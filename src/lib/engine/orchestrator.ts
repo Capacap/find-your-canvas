@@ -6,7 +6,8 @@
  * 2. Send user message to the LLM with native function declarations
  * 3. If the model returns function calls, execute them
  * 4. Feed function results back and repeat if needed
- * 5. Return final response for the caller to persist
+ * 5. Return final response + updated history for the caller to persist
+ *    on the agent session
  *
  * The engine has no direct database dependencies. All state is provided
  * via TurnContext, and all side effects go through TurnActions.
@@ -53,7 +54,7 @@ export interface TurnContext {
   projectName: string;
   agentMemories: AgentMemory[];
   projectImages: ImageMeta[];
-  /** Raw Gemini history from the conversation, passed directly to the API. */
+  /** Raw Gemini history from the orchestrator's agent session. */
   apiHistory: Content[];
   /** Signal to abort the turn. Checked between rounds and passed to API calls. */
   signal?: AbortSignal;
@@ -75,8 +76,10 @@ export interface TurnResult {
   userImageIds: string[];
   assistantText: string;
   assistantImageIds: string[];
-  /** Updated Gemini history including this turn, for storage on the conversation. */
+  /** Updated Gemini history including this turn, for storage on the agent session. */
   apiHistory: Content[];
+  /** Snapshot of the system prompt used for this turn. */
+  systemPrompt: string;
   /** If set, the turn ended due to an error. Partial results above should still be persisted. */
   error?: string;
 }
@@ -524,10 +527,10 @@ let turnInProgress = false;
 
 /**
  * Execute a single agent turn: send the user's message, handle any tool-call
- * rounds, and return everything the caller needs to persist.
+ * rounds, and return everything the caller needs to persist on the agent session.
  *
- * On error, returns partial results with apiHistory rolled back to its
- * pre-turn state so the conversation can safely continue.
+ * On error, returns partial results with history rolled back to its
+ * pre-turn state so the session can safely continue.
  *
  * @param reattachImageIds - Image IDs from a previous failed turn to re-send
  *   as inline data without re-storing them.
@@ -542,7 +545,7 @@ export async function runAgentTurn(
 ): Promise<TurnResult> {
   if (turnInProgress) {
     onEvent({ type: 'error', message: 'A turn is already in progress.' });
-    return { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [], apiHistory: ctx.apiHistory };
+    return { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [], apiHistory: ctx.apiHistory, systemPrompt: '' };
   }
   turnInProgress = true;
 
@@ -563,7 +566,7 @@ async function runAgentTurnInner(
 ): Promise<TurnResult> {
   if (!ctx.apiKey) {
     onEvent({ type: 'error', message: 'No API key configured. Add your Gemini API key in settings.' });
-    return { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [], apiHistory: ctx.apiHistory };
+    return { userText: '', userImageIds: [], assistantText: '', assistantImageIds: [], apiHistory: ctx.apiHistory, systemPrompt: '' };
   }
 
   const systemPrompt = buildSystemPrompt(ctx.projectName, ctx.agentMemories, ctx.projectImages);
@@ -707,6 +710,7 @@ async function runAgentTurnInner(
       // dangling function calls (no tool responses) that the SDK's history
       // curation can't fix, and that corrupt all subsequent turns.
       apiHistory: ctx.apiHistory,
+      systemPrompt,
       error: msg
     };
   }
@@ -720,6 +724,7 @@ async function runAgentTurnInner(
     userImageIds,
     assistantText: finalAssistantText,
     assistantImageIds: generatedImageIds,
-    apiHistory
+    apiHistory,
+    systemPrompt
   };
 }

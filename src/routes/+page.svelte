@@ -489,12 +489,13 @@
     snapshotLoading = true;
 
     try {
-      const history: Content[] = app.currentConversation?.apiHistory ?? [];
-      const systemPrompt = buildSystemPrompt(
-        app.currentProject.name,
-        app.agentMemories,
-        app.projectImages
-      );
+      const session = app.orchestratorSession;
+      const history: Content[] = session?.history ?? [];
+
+      // Use the stored system prompt from the session if available (snapshot
+      // of what the model actually saw), otherwise reconstruct from current state.
+      const systemPrompt = session?.systemPrompt
+        || buildSystemPrompt(app.currentProject.name, app.agentMemories, app.projectImages);
 
       const { text: contextDump, imageCount, imageTotalKB } = buildContextDump(systemPrompt, history);
 
@@ -877,7 +878,7 @@
             </div>
           {/each}
 
-          {#if !turn.isRunning && !turn.errorText && app.currentConversation?.preTurnHistoryLength !== undefined && app.messages.length > 0 && app.messages[app.messages.length - 1].role === 'assistant'}
+          {#if !turn.isRunning && !turn.errorText && app.orchestratorSession?.preTurnHistoryLength !== undefined && app.messages.length > 0 && app.messages[app.messages.length - 1].role === 'assistant'}
             <div class="rollback-row">
               <button class="rollback-btn" onclick={handleRollback} disabled={isRollingBack}>Re-roll</button>
             </div>

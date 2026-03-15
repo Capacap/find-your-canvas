@@ -1,7 +1,7 @@
 /**
  * Reactive app state using Svelte 5 runes.
  */
-import type { Project, Conversation, ChatMessage, ImageMeta, Settings, AgentMemory } from '$lib/types/schema';
+import type { Project, Conversation, ChatMessage, ImageMeta, Settings, AgentMemory, AgentSession } from '$lib/types/schema';
 import * as ops from '$lib/db/operations';
 import { blobToObjectUrl } from '$lib/utils';
 import { downloadProjectZip, importProject as importProjectZip } from '$lib/db/zip';
@@ -14,6 +14,7 @@ let conversations = $state<Conversation[]>([]);
 let messages = $state<ChatMessage[]>([]);
 let projectImages = $state<ImageMeta[]>([]);
 let agentMemories = $state<AgentMemory[]>([]);
+let orchestratorSession = $state<AgentSession | null>(null);
 let settings = $state<Settings | null>(null);
 
 // Image URL cache with LRU eviction. Map iteration order tracks insertion,
@@ -26,6 +27,7 @@ export function getAppState() {
   return {
     get currentProject() { return currentProject; },
     get currentConversation() { return currentConversation; },
+    get orchestratorSession() { return orchestratorSession; },
     get agentMemories() { return agentMemories; },
     get projects() { return projects; },
     get conversations() { return conversations; },
@@ -52,6 +54,7 @@ export async function selectProject(id: string): Promise<void> {
   revokeImageUrls();
   currentProject = (await ops.getProject(id)) ?? null;
   currentConversation = null;
+  orchestratorSession = null;
   messages = [];
   conversations = [];
   projectImages = [];
@@ -67,6 +70,7 @@ export function deselectProject(): void {
   revokeImageUrls();
   currentProject = null;
   currentConversation = null;
+  orchestratorSession = null;
   messages = [];
   conversations = [];
   projectImages = [];
@@ -85,6 +89,10 @@ export async function selectConversation(id: string): Promise<void> {
   currentConversation = convos.find((c) => c.id === id) ?? null;
   if (currentConversation) {
     messages = await ops.listMessages(id);
+    orchestratorSession = await ops.getOrchestratorSession(id);
+  } else {
+    orchestratorSession = null;
+    messages = [];
   }
 }
 
@@ -102,6 +110,7 @@ export async function deleteProject(): Promise<void> {
   revokeImageUrls();
   currentProject = null;
   currentConversation = null;
+  orchestratorSession = null;
   messages = [];
   conversations = [];
   projectImages = [];
@@ -116,6 +125,7 @@ export async function deleteConversation(id: string): Promise<void> {
   conversations = await ops.listConversations(currentProject.id);
   if (currentConversation?.id === id) {
     currentConversation = null;
+    orchestratorSession = null;
     messages = [];
   }
 }
@@ -139,6 +149,12 @@ export async function refreshConversation(): Promise<void> {
   if (currentConversation) {
     const fresh = await ops.getConversation(currentConversation.id);
     if (fresh) currentConversation = fresh;
+  }
+}
+
+export async function refreshOrchestratorSession(): Promise<void> {
+  if (currentConversation) {
+    orchestratorSession = await ops.getOrchestratorSession(currentConversation.id);
   }
 }
 
