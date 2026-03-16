@@ -7,7 +7,7 @@
  * are mocked so we can inspect what the agents write without burning
  * image API credits.
  */
-import type { TurnContext, TurnActions, EngineEvent } from '$lib/engine/types';
+import type { TurnContext, TurnActions, EngineEvent, AgentDefinition, ToolHandler } from '$lib/engine/types';
 import type { AgentMemory, ImageMeta, ImageBlob, ImageSource } from '$lib/types/schema';
 import { TEXT_MODEL, IMAGE_MODEL } from '$lib/types/schema';
 
@@ -321,6 +321,139 @@ export function formatTrace(trace: Trace): string {
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(0, max) + '...';
+}
+
+// ── Subagent trace ──
+
+/** What a specialist did during its run. */
+export interface SubagentTrace {
+  scenario: string;
+  agentType: string;
+  dispatch: string;
+  generations: Array<{
+    prompt: string;
+    label: string;
+    aspectRatio?: string;
+    referenceIds: string[];
+  }>;
+  toolCalls: Array<{ name: string; args: Record<string, unknown> }>;
+  handoffText: string;
+  error?: string;
+}
+
+/**
+ * Wrap an AgentDefinition's handlers with interceptors that record
+ * tool calls into a SubagentTrace. The subagent runner doesn't emit
+ * debug events, so this is how we capture specialist behavior.
+ */
+export function instrumentDefinition(
+  definition: AgentDefinition,
+  trace: SubagentTrace
+): AgentDefinition {
+  const wrappedHandlers: Record<string, ToolHandler> = {};
+
+  for (const [name, handler] of Object.entries(definition.toolHandlers)) {
+    wrappedHandlers[name] = async (toolName, callId, args, ctx, actions, onEvent) => {
+      trace.toolCalls.push({ name, args: { ...args } });
+
+      // Capture generate_image prompts (the main eval output).
+      if (name === 'generate_image') {
+        trace.generations.push({
+          prompt: (args.prompt as string) ?? '',
+          label: (args.label as string) ?? '',
+          aspectRatio: args.aspect_ratio as string | undefined,
+          referenceIds: (args.reference_image_ids as string[]) ?? []
+        });
+      }
+
+      const result = await handler(toolName, callId, args, ctx, actions, onEvent);
+
+      // Capture handoff text.
+      if (name === 'handoff' && result.handoffText) {
+        trace.handoffText = result.handoffText;
+      }
+
+      return result;
+    };
+  }
+
+  return { ...definition, toolHandlers: wrappedHandlers };
+}
+
+export function createSubagentTrace(scenario: string, agentType: string, dispatch: string): SubagentTrace {
+  return { scenario, agentType, dispatch, generations: [], toolCalls: [], handoffText: '' };
+}
+
+/** Format a specialist trace with generation prompts highlighted. */
+export function formatSubagentTrace(trace: SubagentTrace): string {
+  const lines: string[] = [];
+  const sep = '═'.repeat(70);
+  const thin = '─'.repeat(70);
+
+  lines.push(sep);
+  lines.push(`  SCENARIO: ${trace.scenario}`);
+  lines.push(`  AGENT: ${trace.agentType}`);
+  lines.push(sep);
+
+  // Dispatch input (what the orchestrator sent).
+  lines.push('');
+  lines.push('  DISPATCH:');
+  lines.push(thin);
+  for (const line of trace.dispatch.split('\n')) {
+    lines.push(`    ${line}`);
+  }
+  lines.push(thin);
+
+  // Generation prompts (the main thing we're evaluating).
+  if (trace.generations.length > 0) {
+    lines.push('');
+    lines.push('  GENERATION PROMPTS:');
+    for (let i = 0; i < trace.generations.length; i++) {
+      const g = trace.generations[i];
+      lines.push(thin);
+      lines.push(`  [${i + 1}] label: "${g.label}"  aspect: ${g.aspectRatio ?? 'default'}  refs: ${g.referenceIds.length > 0 ? g.referenceIds.join(', ') : 'none'}`);
+      lines.push('');
+      for (const line of g.prompt.split('\n')) {
+        lines.push(`    ${line}`);
+      }
+    }
+    lines.push(thin);
+  }
+
+  // Handoff summary.
+  if (trace.handoffText) {
+    lines.push('');
+    lines.push('  HANDOFF:');
+    lines.push(thin);
+    for (const line of trace.handoffText.split('\n')) {
+      lines.push(`    ${line}`);
+    }
+    lines.push(thin);
+  }
+
+  // All tool calls for context.
+  lines.push('');
+  lines.push('  TOOL CALLS:');
+  for (const call of trace.toolCalls) {
+    if (call.name === 'generate_image') {
+      lines.push(`  - ${call.name} → (see GENERATION PROMPTS above)`);
+    } else if (call.name === 'handoff') {
+      lines.push(`  - ${call.name} → (see HANDOFF above)`);
+    } else {
+      const summary = JSON.stringify(call.args);
+      lines.push(`  - ${call.name} ${truncate(summary, 100)}`);
+    }
+  }
+
+  if (trace.error) {
+    lines.push('');
+    lines.push(`  ERROR: ${trace.error}`);
+  }
+
+  lines.push('');
+  lines.push(sep);
+
+  return lines.join('\n');
 }
 
 // ── Context builder ──
