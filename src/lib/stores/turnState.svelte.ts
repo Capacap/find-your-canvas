@@ -26,6 +26,16 @@ import * as ops from '$lib/db/operations';
 
 // ── Reactive turn state ──
 
+interface SubagentStep {
+  text: string;
+  done: boolean;
+}
+
+export interface SubagentProgress {
+  agentType: string;
+  steps: SubagentStep[];
+}
+
 let isRunning = $state(false);
 let streamingText = $state('');
 let streamingThought = $state('');
@@ -34,6 +44,7 @@ let errorText = $state('');
 let debugEvents = $state<EngineEvent[]>([]);
 let retryInput = $state('');
 let retryImageIds = $state<string[]>([]);
+let subagentProgress = $state<SubagentProgress | null>(null);
 let abortController: AbortController | null = null;
 
 export function getTurnState() {
@@ -45,7 +56,8 @@ export function getTurnState() {
     get errorText() { return errorText; },
     get debugEvents() { return debugEvents; },
     get retryInput() { return retryInput; },
-    get retryImageIds() { return retryImageIds; }
+    get retryImageIds() { return retryImageIds; },
+    get subagentProgress() { return subagentProgress; }
   };
 }
 
@@ -108,6 +120,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
   streamingThought = '';
   statusText = 'Thinking...';
   errorText = '';
+  subagentProgress = null;
 
   // Clean up any leftover error-turn messages from previous failures.
   await ops.deleteErrorMessages(conversationId);
@@ -145,18 +158,47 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
     } else if (event.type === 'thought_delta') {
       streamingThought += event.text;
     } else if (event.type === 'status') statusText = event.text;
-    else if (event.type === 'image_generating') statusText = `Generating: ${event.label}...`;
+    else if (event.type === 'image_generating') {
+      if (subagentProgress) {
+        subagentProgress = {
+          ...subagentProgress,
+          steps: [...subagentProgress.steps, { text: `Generating: ${event.label}`, done: false }]
+        };
+      }
+      statusText = `Generating: ${event.label}...`;
+    }
     else if (event.type === 'image_complete') {
       opts.onImageGenerated?.(event.imageId);
+      if (subagentProgress) {
+        const steps = subagentProgress.steps.map((s) =>
+          !s.done && s.text.startsWith('Generating:') ? { text: `Generated: ${event.label}`, done: true } : s
+        );
+        subagentProgress = { ...subagentProgress, steps };
+      }
       statusText = `Generated: ${event.label}`;
     }
-    else if (event.type === 'image_viewing') statusText = `Viewing ${event.imageIds.length} image(s)...`;
-    else if (event.type === 'subagent_start') statusText = `Specialist working: ${event.agentType}...`;
+    else if (event.type === 'image_viewing') {
+      if (subagentProgress) {
+        subagentProgress = {
+          ...subagentProgress,
+          steps: [...subagentProgress.steps, { text: 'Viewing reference images', done: true }]
+        };
+      }
+      statusText = `Viewing ${event.imageIds.length} image(s)...`;
+    }
+    else if (event.type === 'subagent_start') {
+      subagentProgress = {
+        agentType: event.agentType,
+        steps: []
+      };
+      statusText = '';
+    }
     else if (event.type === 'subagent_end') {
       for (const imageId of event.imageIds) {
         opts.onImageGenerated?.(imageId);
       }
-      statusText = `Specialist done: ${event.agentType}`;
+      subagentProgress = null;
+      statusText = '';
     }
     else if (event.type === 'memory_updated') {
       refreshAgentMemories();

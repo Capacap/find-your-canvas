@@ -986,6 +986,18 @@
             </div>
           {/if}
 
+          {#if turn.subagentProgress && turn.subagentProgress.steps.length > 0}
+            <div class="subagent-progress">
+              <div class="subagent-header">Specialist: {turn.subagentProgress.agentType}</div>
+              {#each turn.subagentProgress.steps as step}
+                <div class="subagent-step" class:done={step.done}>
+                  <span class="step-indicator">{step.done ? '\u2713' : '\u25CB'}</span>
+                  {step.text}{#if !step.done}...{/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+
           {#if turn.statusText || pageStatus}
             <div class="status">{turn.statusText || pageStatus}</div>
           {/if}
@@ -1585,6 +1597,36 @@
     max-width: 300px;
     max-height: 300px;
     border-radius: 6px;
+  }
+
+  .subagent-progress {
+    background: #1a1a22;
+    border-left: 3px solid #7c6fe0;
+    border-radius: 0 6px 6px 0;
+    padding: 0.6rem 0.8rem;
+    margin: 0.25rem 0;
+    font-size: 0.85rem;
+    color: #b8b8c8;
+  }
+
+  .subagent-header {
+    color: #9d93e0;
+    font-weight: 600;
+    margin-bottom: 0.3rem;
+  }
+
+  .subagent-step {
+    padding: 0.15rem 0;
+    color: #888;
+  }
+
+  .subagent-step .step-indicator {
+    display: inline-block;
+    width: 1.2em;
+  }
+
+  .subagent-step.done {
+    color: #8bba8b;
   }
 
   .status {
