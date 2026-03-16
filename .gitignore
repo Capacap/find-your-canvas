@@ -25,6 +25,9 @@ Thumbs.db
 # Project archives
 /archive
 
+# Eval traces
+/eval/traces
+
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
