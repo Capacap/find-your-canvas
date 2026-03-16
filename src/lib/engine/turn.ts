@@ -1,10 +1,10 @@
 /**
- * Turn harness.
+ * Orchestrator turn harness.
  *
- * Runs the agent turn loop: send user message, stream response, execute
- * tool calls, repeat. Agent-specific logic (system prompt, tool declarations,
- * tool handlers) lives in agents/. This module is the execution engine
- * that any agent definition can plug into.
+ * Runs the orchestrator's turn loop: send user message, stream response,
+ * execute tool calls (including subagent dispatches), repeat. The
+ * orchestrator agent definition lives in agents/orchestrator.ts; this
+ * module is the execution engine that drives it.
  *
  * No direct database dependencies. All state arrives via TurnContext,
  * all side effects go through TurnActions.
@@ -37,8 +37,8 @@ export type {
   UserAttachment
 };
 
-// Re-export so the context tab can reconstruct the system prompt.
-export { buildOrchestratorPrompt as buildSystemPrompt } from './agents/orchestrator';
+// Re-export so the context tab can reconstruct the orchestrator's system prompt.
+export { buildOrchestratorPrompt } from './agents/orchestrator';
 
 // ── Constants ──
 

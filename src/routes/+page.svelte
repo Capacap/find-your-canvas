@@ -20,7 +20,7 @@
     deleteImage
   } from '$lib/stores/appState.svelte';
   import { getTurnState, sendMessage, retryMessage, rollbackTurn, clearTurnError, clearDebugLog, cancelTurn } from '$lib/stores/turnState.svelte';
-  import { debugInjectFault, buildSystemPrompt } from '$lib/engine/turn';
+  import { debugInjectFault, buildOrchestratorPrompt } from '$lib/engine/turn';
   import { countTokens } from '$lib/engine/gemini';
   import { TEXT_MODEL } from '$lib/types/schema';
   import type { AgentSession } from '$lib/types/schema';
@@ -579,7 +579,7 @@
       // Use the stored system prompt from the session if available (snapshot
       // of what the model actually saw), otherwise reconstruct from current state.
       const systemPrompt = session?.systemPrompt
-        || buildSystemPrompt(app.currentProject.name, app.agentMemories, app.projectImages);
+        || buildOrchestratorPrompt(app.currentProject.name, app.agentMemories, app.projectImages);
 
       // Fetch subagent sessions for this conversation.
       const allSessions = await listAgentSessions(app.currentConversation.id);
