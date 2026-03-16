@@ -20,9 +20,11 @@
     deleteImage
   } from '$lib/stores/appState.svelte';
   import { getTurnState, sendMessage, retryMessage, rollbackTurn, clearTurnError, clearDebugLog, cancelTurn } from '$lib/stores/turnState.svelte';
-  import { debugInjectFault, buildSystemPrompt } from '$lib/engine/orchestrator';
+  import { debugInjectFault, buildSystemPrompt } from '$lib/engine/turn';
   import { countTokens } from '$lib/engine/gemini';
   import { TEXT_MODEL } from '$lib/types/schema';
+  import type { AgentSession } from '$lib/types/schema';
+  import { listAgentSessions } from '$lib/db/operations';
   import type { Content } from '@google/genai';
   import { marked } from 'marked';
 
@@ -398,18 +400,8 @@
       && !part.thought && !part.thoughtSignature && !!part.text;
   }
 
-  function buildContextDump(systemPrompt: string, history: Content[]): { text: string; imageCount: number; imageTotalKB: number } {
-    const lines: string[] = [];
-    let imageCount = 0;
-    let imageTotalKB = 0;
-
-    lines.push('=== SYSTEM INSTRUCTION ===', '', systemPrompt, '');
-
-    // Merge consecutive entries with the same label. The Gemini SDK splits
-    // streaming responses into many Content objects, which produces an
-    // unreadable dump if rendered individually.
+  function renderHistory(history: Content[], lines: string[], imageStats: { count: number; kb: number }) {
     let currentLabel = '';
-    // Accumulate plain text fragments to concatenate without newlines.
     let pendingText = '';
 
     function flushText() {
@@ -424,17 +416,12 @@
 
       const parts = content.parts as any[];
 
-      // Count images for meta.
       for (const part of parts) {
         const imgs = countPartImages(part);
-        imageCount += imgs.count;
-        imageTotalKB += imgs.kb;
+        imageStats.count += imgs.count;
+        imageStats.kb += imgs.kb;
       }
 
-      // When a model Content has both text and functionCall parts, the
-      // text is the model's reasoning/response and the function calls are
-      // its tool invocations. Split them into separate labeled sections
-      // so the text doesn't vanish under the "TOOL CALLS" header.
       const role = content.role ?? 'unknown';
       const hasNonCallContent = parts.some((p: any) => !p.functionCall && renderPart(p) !== null);
       const hasCalls = parts.some((p: any) => p.functionCall);
@@ -442,7 +429,6 @@
       const sections: { label: string; parts: any[] }[] = [];
 
       if (role === 'model' && hasNonCallContent && hasCalls) {
-        // Split: text parts under MODEL, functionCall parts under TOOL CALLS.
         sections.push(
           { label: 'MODEL', parts: parts.filter((p: any) => !p.functionCall) },
           { label: 'TOOL CALLS', parts: parts.filter((p: any) => p.functionCall) }
@@ -452,8 +438,6 @@
       }
 
       for (const section of sections) {
-        // Pre-render parts; skip sections that produce no visible output
-        // (e.g. Content with only thoughtSignature parts).
         const rendered: { part: any; text: string }[] = [];
         for (const part of section.parts) {
           const text = renderPart(part);
@@ -480,12 +464,112 @@
     }
 
     flushText();
+  }
+
+  function buildContextDump(systemPrompt: string, history: Content[], subagentSessions: AgentSession[] = []): { text: string; imageCount: number; imageTotalKB: number } {
+    const lines: string[] = [];
+    const imageStats = { count: 0, kb: 0 };
+
+    lines.push('=== SYSTEM INSTRUCTION ===', '', systemPrompt, '');
+
+    // Build a map of subagent sessions by dispatchId for inline rendering.
+    const subagentByDispatchId = new Map<string, AgentSession>();
+    for (const sub of subagentSessions) {
+      if (sub.dispatchId) {
+        subagentByDispatchId.set(sub.dispatchId, sub);
+      }
+    }
+
+    // Render orchestrator history, inserting subagent traces after dispatch tool results.
+    let currentLabel = '';
+    let pendingText = '';
+
+    function flushText() {
+      if (pendingText) {
+        lines.push(pendingText);
+        pendingText = '';
+      }
+    }
+
+    for (const content of history) {
+      if (!content.parts || content.parts.length === 0) continue;
+
+      const parts = content.parts as any[];
+
+      for (const part of parts) {
+        const imgs = countPartImages(part);
+        imageStats.count += imgs.count;
+        imageStats.kb += imgs.kb;
+      }
+
+      const role = content.role ?? 'unknown';
+      const hasNonCallContent = parts.some((p: any) => !p.functionCall && renderPart(p) !== null);
+      const hasCalls = parts.some((p: any) => p.functionCall);
+
+      const sections: { label: string; parts: any[] }[] = [];
+
+      if (role === 'model' && hasNonCallContent && hasCalls) {
+        sections.push(
+          { label: 'MODEL', parts: parts.filter((p: any) => !p.functionCall) },
+          { label: 'TOOL CALLS', parts: parts.filter((p: any) => p.functionCall) }
+        );
+      } else {
+        sections.push({ label: contentLabel(content), parts });
+      }
+
+      for (const section of sections) {
+        const rendered: { part: any; text: string }[] = [];
+        for (const part of section.parts) {
+          const text = renderPart(part);
+          if (text !== null) rendered.push({ part, text });
+        }
+        if (rendered.length === 0) continue;
+
+        if (section.label !== currentLabel) {
+          flushText();
+          if (currentLabel) lines.push('');
+          lines.push(`--- ${section.label} ---`);
+          currentLabel = section.label;
+        }
+
+        for (const { part, text } of rendered) {
+          if (isPlainTextPart(part)) {
+            pendingText += text;
+          } else {
+            flushText();
+            lines.push(text);
+          }
+
+          // After rendering a dispatch tool call, check if there's a subagent trace.
+          if (part.functionCall) {
+            const callId = part.functionCall.id;
+            const callName = part.functionCall.name ?? '';
+            if (callId && callName.startsWith('dispatch_') && subagentByDispatchId.has(callId)) {
+              flushText();
+              const sub = subagentByDispatchId.get(callId)!;
+              lines.push('');
+              lines.push(`    ╭── SUBAGENT: ${sub.agentType} (dispatch: ${sub.dispatchId}) ──`);
+              lines.push(`    │ System prompt: ${sub.systemPrompt.slice(0, 100)}...`);
+              const subLines: string[] = [];
+              renderHistory(sub.history, subLines, imageStats);
+              for (const sl of subLines) {
+                lines.push(`    │ ${sl}`);
+              }
+              lines.push(`    ╰── END SUBAGENT ──`);
+              lines.push('');
+            }
+          }
+        }
+      }
+    }
+
+    flushText();
     lines.push('');
-    return { text: lines.join('\n'), imageCount, imageTotalKB };
+    return { text: lines.join('\n'), imageCount: imageStats.count, imageTotalKB: imageStats.kb };
   }
 
   async function takeSnapshot() {
-    if (!app.currentProject) return;
+    if (!app.currentProject || !app.currentConversation) return;
     snapshotLoading = true;
 
     try {
@@ -497,7 +581,11 @@
       const systemPrompt = session?.systemPrompt
         || buildSystemPrompt(app.currentProject.name, app.agentMemories, app.projectImages);
 
-      const { text: contextDump, imageCount, imageTotalKB } = buildContextDump(systemPrompt, history);
+      // Fetch subagent sessions for this conversation.
+      const allSessions = await listAgentSessions(app.currentConversation.id);
+      const subagentSessions = allSessions.filter((s) => s.agentType !== 'orchestrator');
+
+      const { text: contextDump, imageCount, imageTotalKB } = buildContextDump(systemPrompt, history, subagentSessions);
 
       let tokenCount: number | null = null;
       const apiKey = app.settings?.geminiApiKey;

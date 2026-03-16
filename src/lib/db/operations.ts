@@ -288,6 +288,12 @@ export async function saveTurnResult(
     assistantImageIds: string[];
     apiHistory: Content[];
     systemPrompt: string;
+    subagentSessions?: Array<{
+      agentType: 'text-to-image' | 'image-to-image';
+      dispatchId: string;
+      systemPrompt: string;
+      history: Content[];
+    }>;
     error?: string;
   },
   /** apiHistory.length before this turn ran. Stored on success for rollback. */
@@ -325,6 +331,23 @@ export async function saveTurnResult(
       updatedAt: timestamp,
       ...(!isError && preTurnHistoryLength !== undefined ? { preTurnHistoryLength } : {})
     });
+
+    // Persist subagent sessions spawned during this turn.
+    if (result.subagentSessions) {
+      for (const sub of result.subagentSessions) {
+        await db.agentSessions.add({
+          id: generateId(),
+          conversationId,
+          agentType: sub.agentType,
+          dispatchId: sub.dispatchId,
+          systemPrompt: sub.systemPrompt,
+          history: sub.history,
+          createdAt: timestamp,
+          updatedAt: timestamp
+        });
+      }
+    }
+
     await db.conversations.update(conversationId, { updatedAt: timestamp });
     await db.projects.update(projectId, { updatedAt: timestamp });
   });

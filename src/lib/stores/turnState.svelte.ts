@@ -16,11 +16,11 @@ import {
 } from './appState.svelte';
 import {
   runAgentTurn,
-  type OrchestratorEvent,
+  type EngineEvent,
   type UserAttachment,
   type TurnContext,
   type TurnActions
-} from '$lib/engine/orchestrator';
+} from '$lib/engine/turn';
 import { TEXT_MODEL, IMAGE_MODEL } from '$lib/types/schema';
 import * as ops from '$lib/db/operations';
 
@@ -31,7 +31,7 @@ let streamingText = $state('');
 let streamingThought = $state('');
 let statusText = $state('');
 let errorText = $state('');
-let debugEvents = $state<OrchestratorEvent[]>([]);
+let debugEvents = $state<EngineEvent[]>([]);
 let retryInput = $state('');
 let retryImageIds = $state<string[]>([]);
 let abortController: AbortController | null = null;
@@ -134,7 +134,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
       ops.upsertAgentMemory(projectId, slug, title, summary, content)
   };
 
-  const onEvent = (event: OrchestratorEvent) => {
+  const onEvent = (event: EngineEvent) => {
     if (event.type.startsWith('debug_')) {
       debugEvents = [...debugEvents, event];
     }
@@ -151,6 +151,13 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
       statusText = `Generated: ${event.label}`;
     }
     else if (event.type === 'image_viewing') statusText = `Viewing ${event.imageIds.length} image(s)...`;
+    else if (event.type === 'subagent_start') statusText = `Specialist working: ${event.agentType}...`;
+    else if (event.type === 'subagent_end') {
+      for (const imageId of event.imageIds) {
+        opts.onImageGenerated?.(imageId);
+      }
+      statusText = `Specialist done: ${event.agentType}`;
+    }
     else if (event.type === 'memory_updated') {
       refreshAgentMemories();
       statusText = `Memory updated: ${event.slug}`;
