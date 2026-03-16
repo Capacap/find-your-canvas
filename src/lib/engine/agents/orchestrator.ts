@@ -57,13 +57,13 @@ export function buildOrchestratorPrompt(
 const dispatchTextToImageDeclaration: FunctionDeclaration = {
   name: 'dispatch_text_to_image',
   description:
-    'Dispatch an image generation task to the text-to-image specialist. Describe what you want created in a free-form prompt. Reference existing images by their IDs; the specialist will fetch them with view_images. The specialist may generate multiple images if the task warrants it.',
+    'Dispatch an image generation task to the text-to-image specialist. Write a creative brief describing what you want and why, with reference image IDs, constraints, and project context. The specialist handles prompt engineering.',
   parameters: {
     type: Type.OBJECT,
     properties: {
       prompt: {
         type: Type.STRING,
-        description: 'Free-form prompt describing what to generate. Include image IDs for style/character references, aspect ratio preferences, and any relevant project context.'
+        description: 'Creative brief: what to create, why, reference image IDs with usage notes, aspect ratio, constraints, and relevant project context. Describe intent, not prompt structure.'
       }
     },
     required: ['prompt']
@@ -73,13 +73,13 @@ const dispatchTextToImageDeclaration: FunctionDeclaration = {
 const dispatchImageToImageDeclaration: FunctionDeclaration = {
   name: 'dispatch_image_to_image',
   description:
-    'Dispatch an image transformation task to the image-to-image specialist. Provide the source image ID and describe the desired changes. For multi-edit tasks, the specialist will decompose them into sequential atomic operations.',
+    'Dispatch an image transformation task to the image-to-image specialist. Provide the source image ID, what should change, and what should be preserved. The specialist handles prompt engineering and multi-edit decomposition.',
   parameters: {
     type: Type.OBJECT,
     properties: {
       prompt: {
         type: Type.STRING,
-        description: 'Free-form prompt describing what to change. Must include the source image ID and a description of the transformation. For multiple edits, describe each change.'
+        description: 'Creative brief: source image ID, what to change, what to preserve, why, and relevant project context. For multiple edits, describe each desired change.'
       }
     },
     required: ['prompt']
