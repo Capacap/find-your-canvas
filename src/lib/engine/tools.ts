@@ -77,7 +77,7 @@ export const viewImagesDeclaration: FunctionDeclaration = {
       image_ids: {
         type: Type.ARRAY,
         items: { type: Type.STRING },
-        description: 'IDs of the images to view (from the project images index). Max 6.'
+        description: 'IDs of the images to view. Max 6.'
       },
       reason: {
         type: Type.STRING,
@@ -97,7 +97,7 @@ export const readMemoryDeclaration: FunctionDeclaration = {
     properties: {
       slug: {
         type: Type.STRING,
-        description: 'The slug of the memory topic to read (from the memory index in the system prompt).'
+        description: 'The slug of the memory topic to read.'
       }
     },
     required: ['slug']
@@ -130,6 +130,38 @@ export const updateMemoryDeclaration: FunctionDeclaration = {
       }
     },
     required: ['slug', 'title', 'summary', 'content']
+  }
+};
+
+export const searchImagesDeclaration: FunctionDeclaration = {
+  name: 'search_images',
+  description:
+    'Search project images by label or generation context. Use this to find images that may not appear in the system prompt index (older images fall off the most-recently-used list).',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      query: {
+        type: Type.STRING,
+        description: 'Search term to match against image labels and generation context (case-insensitive).'
+      }
+    },
+    required: ['query']
+  }
+};
+
+export const searchMemoriesDeclaration: FunctionDeclaration = {
+  name: 'search_memories',
+  description:
+    'Search project memory topics by slug, title, or summary. Use this to find memory topics that may not appear in the system prompt index.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      query: {
+        type: Type.STRING,
+        description: 'Search term to match against memory slugs, titles, and summaries (case-insensitive).'
+      }
+    },
+    required: ['query']
   }
 };
 
@@ -170,6 +202,11 @@ export const handleGenerateImage: ToolHandler = async (toolName, callId, args, c
         return { data, mimeType: img.mimeType };
       })
     )).filter((img): img is { data: string; mimeType: string } => img !== null);
+
+    // Touch reference images so they bubble up in the MRU index.
+    if (referenceImageIds.length > 0) {
+      await actions.touchImages(referenceImageIds);
+    }
 
     const imageResponse = await generateImage(ctx.apiKey, ctx.imageModel, prompt, {
       aspectRatio,
@@ -230,6 +267,9 @@ export const handleViewImages: ToolHandler = async (toolName, callId, args, _ctx
       output += `. Not found: ${notFound.join(', ')}`;
     }
 
+    // Touch viewed images so they bubble up in the MRU index.
+    await actions.touchImages(outputLines);
+
     return {
       responseParts: [functionResponsePart(toolName, callId, { output }, imageParts)]
     };
@@ -251,6 +291,9 @@ export const handleReadMemory: ToolHandler = async (toolName, callId, args, _ctx
         : `Topic "${slug}" not found. No topics exist yet. Use update_memory to create one.`;
       return { responseParts: [functionResponsePart(toolName, callId, { error: hint })] };
     }
+
+    // Touch so it bubbles up in the MRU index.
+    await actions.touchMemory(memory.slug);
 
     return {
       responseParts: [
@@ -276,6 +319,68 @@ export const handleUpdateMemory: ToolHandler = async (toolName, callId, args, _c
     return { responseParts: [functionResponsePart(toolName, callId, { output: `Memory topic "${slug}" ${verb}.` })] };
   } catch (err) {
     return toolErrorResult(toolName, callId, err, 'Failed to update memory', onEvent);
+  }
+};
+
+const MAX_SEARCH_RESULTS = 50;
+
+export const handleSearchImages: ToolHandler = async (toolName, callId, args, _ctx, actions, _onEvent) => {
+  const query = args.query as string;
+  if (!query?.trim()) {
+    return { responseParts: [functionResponsePart(toolName, callId, { error: 'No search query provided.' })] };
+  }
+
+  try {
+    const results = await actions.searchImages(query);
+    if (results.length === 0) {
+      return { responseParts: [functionResponsePart(toolName, callId, { output: `No images matching "${query}".` })] };
+    }
+
+    const capped = results.slice(0, MAX_SEARCH_RESULTS);
+    const lines = capped.map(img => {
+      const source = img.source === 'user' ? 'user_uploaded' : 'generated';
+      const fields: string[] = [`id: ${img.id}`, `source: ${source}`];
+      if (img.generationContext) {
+        const genCtx = img.generationContext;
+        fields.push(`prompt: "${genCtx.length > 120 ? genCtx.slice(0, 120) + '...' : genCtx}"`);
+      }
+      return `- ${img.label} - { ${fields.join(', ')} }`;
+    });
+    let output = `Found ${results.length} image(s):\n${lines.join('\n')}`;
+    if (results.length > MAX_SEARCH_RESULTS) {
+      output += `\n\n(showing first ${MAX_SEARCH_RESULTS} of ${results.length} results, try a more specific query)`;
+    }
+    return {
+      responseParts: [functionResponsePart(toolName, callId, { output })]
+    };
+  } catch (err) {
+    return { responseParts: [functionResponsePart(toolName, callId, { error: String(err) })] };
+  }
+};
+
+export const handleSearchMemories: ToolHandler = async (toolName, callId, args, _ctx, actions, _onEvent) => {
+  const query = args.query as string;
+  if (!query?.trim()) {
+    return { responseParts: [functionResponsePart(toolName, callId, { error: 'No search query provided.' })] };
+  }
+
+  try {
+    const results = await actions.searchMemories(query);
+    if (results.length === 0) {
+      return { responseParts: [functionResponsePart(toolName, callId, { output: `No memory topics matching "${query}".` })] };
+    }
+
+    const capped = results.slice(0, MAX_SEARCH_RESULTS);
+    const lines = capped.map(mem => `| \`${mem.slug}\` | ${mem.title} | ${mem.summary} |`);
+    let output = `Found ${results.length} topic(s):\n| Slug | Topic | Summary |\n| --- | --- | --- |\n${lines.join('\n')}`;
+    if (results.length > MAX_SEARCH_RESULTS) {
+      output += `\n\n(showing first ${MAX_SEARCH_RESULTS} of ${results.length} results, try a more specific query)`;
+    }
+    return {
+      responseParts: [functionResponsePart(toolName, callId, { output })]
+    };
+  } catch (err) {
+    return { responseParts: [functionResponsePart(toolName, callId, { error: String(err) })] };
   }
 };
 

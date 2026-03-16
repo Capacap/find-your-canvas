@@ -100,6 +100,8 @@ export interface ImageMeta {
   /** Downscaled JPEG (max 512px) for gallery display and model context. */
   thumbnail: Blob;
   createdAt: number;
+  /** Last time this image was accessed (created, viewed, used as reference). Unix ms. */
+  lastAccessedAt: number;
 }
 
 /** Full-size image blob, loaded on demand. */
@@ -122,6 +124,8 @@ export interface AgentMemory {
   content: string;
   createdAt: number;
   updatedAt: number;
+  /** Last time this memory was accessed (created, read, updated). Unix ms. */
+  lastAccessedAt: number;
 }
 
 /** App-level settings persisted in IndexedDB. */

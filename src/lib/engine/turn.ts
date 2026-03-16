@@ -190,7 +190,10 @@ async function runAgentTurnInner(
   }
 
   // Build the agent definition from current project state.
-  const agent = getOrchestratorAgent(ctx.projectName, ctx.agentMemories, ctx.projectImages);
+  const agent = getOrchestratorAgent(
+    ctx.projectName, ctx.agentMemories, ctx.projectImages,
+    ctx.totalMemoryCount, ctx.totalImageCount
+  );
   const { systemPrompt, toolDeclarations, toolHandlers } = agent;
 
   onEvent({ type: 'debug_system_prompt', prompt: systemPrompt });
@@ -221,6 +224,9 @@ async function runAgentTurnInner(
         reattachParts.push({ inlineData: { data: base64, mimeType: img.mimeType } });
         userImageIds.push(imageId);
       }
+    }
+    if (reattachImageIds.length > 0) {
+      await actions.touchImages(reattachImageIds);
     }
 
     // First iteration: user message + attachments. Subsequent iterations: tool response parts.

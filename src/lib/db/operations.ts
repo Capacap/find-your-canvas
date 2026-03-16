@@ -137,7 +137,8 @@ export async function upsertAgentMemory(
         title,
         summary,
         content,
-        updatedAt: timestamp
+        updatedAt: timestamp,
+        lastAccessedAt: timestamp
       });
     } else {
       await db.agentMemories.add({
@@ -148,12 +149,52 @@ export async function upsertAgentMemory(
         summary,
         content,
         createdAt: timestamp,
-        updatedAt: timestamp
+        updatedAt: timestamp,
+        lastAccessedAt: timestamp
       });
     }
 
     await db.projects.update(projectId, { updatedAt: timestamp });
   });
+}
+
+/** Count memory topics in a project (no data loaded). */
+export async function countMemories(projectId: string): Promise<number> {
+  return db.agentMemories.where('projectId').equals(projectId).count();
+}
+
+/** Update lastAccessedAt for a memory topic. */
+export async function touchMemory(projectId: string, slug: string): Promise<void> {
+  const mem = await db.agentMemories.where('[projectId+slug]').equals([projectId, slug]).first();
+  if (mem) {
+    await db.agentMemories.update(mem.id, { lastAccessedAt: now() });
+  }
+}
+
+/** List memories sorted by lastAccessedAt descending, with optional limit. */
+export async function listMemoriesMRU(projectId: string, limit?: number): Promise<AgentMemory[]> {
+  let collection = db.agentMemories
+    .where('[projectId+lastAccessedAt]')
+    .between([projectId, -Infinity], [projectId, Infinity])
+    .reverse();
+  if (limit) collection = collection.limit(limit);
+  return collection.toArray();
+}
+
+/** Search memories by slug, title, or summary (case-insensitive substring match). */
+export async function searchMemories(projectId: string, query: string): Promise<AgentMemory[]> {
+  if (!query.trim()) return [];
+  const lower = query.toLowerCase();
+  return db.agentMemories
+    .where('projectId')
+    .equals(projectId)
+    .filter(mem => {
+      const slug = mem.slug?.toLowerCase() ?? '';
+      const title = mem.title?.toLowerCase() ?? '';
+      const summary = mem.summary?.toLowerCase() ?? '';
+      return slug.includes(lower) || title.includes(lower) || summary.includes(lower);
+    })
+    .toArray();
 }
 
 // ── Conversations ──
@@ -456,6 +497,7 @@ export async function createImage(
   const id = generateId();
   const { thumbnail, width, height } = await createThumbnail(blob);
 
+  const timestamp = now();
   const meta: ImageMeta = {
     id,
     projectId,
@@ -467,14 +509,15 @@ export async function createImage(
     label,
     generationContext: options.generationContext,
     thumbnail,
-    createdAt: now()
+    createdAt: timestamp,
+    lastAccessedAt: timestamp
   };
   const blobRecord: ImageBlob = { id, blob };
 
   await db.transaction('rw', [db.imageMeta, db.imageBlobs, db.projects], async () => {
     await db.imageMeta.add(meta);
     await db.imageBlobs.add(blobRecord);
-    await db.projects.update(projectId, { updatedAt: meta.createdAt });
+    await db.projects.update(projectId, { updatedAt: timestamp });
   });
 
   return meta;
@@ -497,6 +540,47 @@ export async function getImageBlob(id: string): Promise<ImageBlob | undefined> {
 /** List image metadata for a project (no blobs loaded). */
 export async function listImages(projectId: string): Promise<ImageMeta[]> {
   return db.imageMeta.where('projectId').equals(projectId).toArray();
+}
+
+/** Count images in a project (no data loaded). */
+export async function countImages(projectId: string): Promise<number> {
+  return db.imageMeta.where('projectId').equals(projectId).count();
+}
+
+/** Update lastAccessedAt for one or more images. */
+export async function touchImages(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const timestamp = now();
+  await db.transaction('rw', db.imageMeta, async () => {
+    for (const id of ids) {
+      await db.imageMeta.update(id, { lastAccessedAt: timestamp });
+    }
+  });
+}
+
+/** List images sorted by lastAccessedAt descending, with optional limit. */
+export async function listImagesMRU(projectId: string, limit?: number): Promise<ImageMeta[]> {
+  let collection = db.imageMeta
+    .where('[projectId+lastAccessedAt]')
+    .between([projectId, -Infinity], [projectId, Infinity])
+    .reverse();
+  if (limit) collection = collection.limit(limit);
+  return collection.toArray();
+}
+
+/** Search images by label or generationContext (case-insensitive substring match). */
+export async function searchImages(projectId: string, query: string): Promise<ImageMeta[]> {
+  if (!query.trim()) return [];
+  const lower = query.toLowerCase();
+  return db.imageMeta
+    .where('projectId')
+    .equals(projectId)
+    .filter(img => {
+      const label = img.label?.toLowerCase() ?? '';
+      const ctx = img.generationContext?.toLowerCase() ?? '';
+      return label.includes(lower) || ctx.includes(lower);
+    })
+    .toArray();
 }
 
 export async function deleteImage(id: string): Promise<void> {

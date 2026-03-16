@@ -33,6 +33,21 @@ class BananaDB extends Dexie {
       agentSessions: 'id, conversationId, [conversationId+agentType]',
       settings: 'id'
     });
+
+    this.version(2).stores({
+      imageMeta: 'id, projectId, messageId, [projectId+lastAccessedAt]',
+      agentMemories: 'id, projectId, [projectId+slug], [projectId+lastAccessedAt]'
+    }).upgrade(tx => {
+      const now = Date.now();
+      return Promise.all([
+        tx.table('imageMeta').toCollection().modify(img => {
+          img.lastAccessedAt = img.lastAccessedAt ?? img.createdAt ?? now;
+        }),
+        tx.table('agentMemories').toCollection().modify(mem => {
+          mem.lastAccessedAt = mem.lastAccessedAt ?? mem.updatedAt ?? mem.createdAt ?? now;
+        })
+      ]);
+    });
   }
 }
 

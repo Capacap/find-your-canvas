@@ -20,9 +20,13 @@ import {
   viewImagesDeclaration,
   readMemoryDeclaration,
   updateMemoryDeclaration,
+  searchImagesDeclaration,
+  searchMemoriesDeclaration,
   handleViewImages,
   handleReadMemory,
-  handleUpdateMemory
+  handleUpdateMemory,
+  handleSearchImages,
+  handleSearchMemories
 } from '../tools';
 import { runSubagent } from '../subagent';
 import { getTextToImageAgent } from './text-to-image';
@@ -37,12 +41,14 @@ import { getImageToImageAgent } from './image-to-image';
 export function buildOrchestratorPrompt(
   projectName: string,
   agentMemories: AgentMemory[],
-  projectImages: ImageMeta[]
+  projectImages: ImageMeta[],
+  totalMemoryCount?: number,
+  totalImageCount?: number
 ): string {
   return interpolate(orchestratorTemplate, {
     projectName,
-    memorySection: buildMemorySection(agentMemories),
-    imageIndexSection: buildImageIndex(projectImages)
+    memorySection: buildMemorySection(agentMemories, totalMemoryCount),
+    imageIndexSection: buildImageIndex(projectImages, totalImageCount)
   });
 }
 
@@ -93,7 +99,7 @@ function makeDispatchHandler(
     onEvent({ type: 'subagent_start', agentType, dispatchId });
 
     try {
-      const definition = getAgent(ctx.projectName, ctx.agentMemories, ctx.projectImages);
+      const definition = getAgent(ctx.projectName, ctx.agentMemories, ctx.projectImages, ctx.totalMemoryCount, ctx.totalImageCount);
       const result = await runSubagent(definition, prompt, ctx, actions, onEvent);
 
       onEvent({ type: 'subagent_end', agentType, dispatchId, imageIds: result.imageIds });
@@ -136,16 +142,20 @@ function makeDispatchHandler(
 export function getOrchestratorAgent(
   projectName: string,
   memories: AgentMemory[],
-  images: ImageMeta[]
+  images: ImageMeta[],
+  totalMemoryCount?: number,
+  totalImageCount?: number
 ): AgentDefinition {
   return {
-    systemPrompt: buildOrchestratorPrompt(projectName, memories, images),
+    systemPrompt: buildOrchestratorPrompt(projectName, memories, images, totalMemoryCount, totalImageCount),
     toolDeclarations: [
       dispatchTextToImageDeclaration,
       dispatchImageToImageDeclaration,
       viewImagesDeclaration,
       readMemoryDeclaration,
-      updateMemoryDeclaration
+      updateMemoryDeclaration,
+      searchImagesDeclaration,
+      searchMemoriesDeclaration
     ],
     toolHandlers: {
       dispatch_text_to_image: makeDispatchHandler('text-to-image', getTextToImageAgent),
@@ -153,6 +163,8 @@ export function getOrchestratorAgent(
       view_images: handleViewImages,
       read_memory: handleReadMemory,
       update_memory: handleUpdateMemory,
+      search_images: handleSearchImages,
+      search_memories: handleSearchMemories
     }
   };
 }

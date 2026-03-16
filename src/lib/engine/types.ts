@@ -37,8 +37,14 @@ export interface TurnContext {
   textModel: string;
   imageModel: string;
   projectName: string;
+  /** MRU-capped subset of agent memories for the system prompt. */
   agentMemories: AgentMemory[];
+  /** Total number of memories in the project (for truncation notice). */
+  totalMemoryCount: number;
+  /** MRU-capped subset of project images for the system prompt. */
   projectImages: ImageMeta[];
+  /** Total number of images in the project (for truncation notice). */
+  totalImageCount: number;
   /** Raw Gemini history from the agent session. */
   apiHistory: Content[];
   /** Signal to abort the turn. Checked between rounds and passed to API calls. */
@@ -50,9 +56,13 @@ export interface TurnActions {
   createImage(blob: Blob, label: string, opts?: { source?: ImageSource; generationContext?: string }): Promise<ImageMeta>;
   getImage(id: string): Promise<(ImageMeta & ImageBlob) | undefined>;
   getImageThumbnail(id: string): Promise<{ base64: string; mimeType: string } | undefined>;
+  touchImages(ids: string[]): Promise<void>;
+  searchImages(query: string): Promise<ImageMeta[]>;
   getAgentMemory(slug: string): Promise<AgentMemory | undefined>;
   listAgentMemories(): Promise<AgentMemory[]>;
   upsertAgentMemory(slug: string, title: string, summary: string, content: string): Promise<void>;
+  touchMemory(slug: string): Promise<void>;
+  searchMemories(query: string): Promise<AgentMemory[]>;
 }
 
 /** What the caller needs to persist after a turn completes. */

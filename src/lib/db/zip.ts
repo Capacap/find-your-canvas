@@ -49,6 +49,7 @@ interface ImageManifestEntry {
   label: string;
   generationContext?: string;
   createdAt: number;
+  lastAccessedAt?: number;
   filename: string;
 }
 
@@ -103,6 +104,7 @@ export async function exportProject(projectId: string): Promise<Blob> {
         label: meta.label,
         generationContext: meta.generationContext,
         createdAt: meta.createdAt,
+        lastAccessedAt: meta.lastAccessedAt,
         filename
       });
     }
@@ -169,7 +171,8 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
         label: entry.label,
         generationContext: entry.generationContext,
         thumbnail,
-        createdAt: entry.createdAt
+        createdAt: entry.createdAt,
+        lastAccessedAt: entry.lastAccessedAt ?? entry.createdAt
       });
       batchBlobs.push({
         id: entry.id,

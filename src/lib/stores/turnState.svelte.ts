@@ -126,13 +126,25 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
   await ops.deleteErrorMessages(conversationId);
   await refreshMessages();
 
+  // Fetch MRU-capped artifact lists for the system prompt.
+  const IMAGE_MRU_CAP = 30;
+  const MEMORY_MRU_CAP = 20;
+  const [mruImages, imageCount, mruMemories, memoryCount] = await Promise.all([
+    ops.listImagesMRU(projectId, IMAGE_MRU_CAP),
+    ops.countImages(projectId),
+    ops.listMemoriesMRU(projectId, MEMORY_MRU_CAP),
+    ops.countMemories(projectId)
+  ]);
+
   const ctx: TurnContext = {
     apiKey: app.settings?.geminiApiKey ?? '',
     textModel: TEXT_MODEL,
     imageModel: IMAGE_MODEL,
     projectName: app.currentProject.name,
-    agentMemories: $state.snapshot(app.agentMemories),
-    projectImages: $state.snapshot(app.projectImages),
+    agentMemories: mruMemories,
+    totalMemoryCount: memoryCount,
+    projectImages: mruImages,
+    totalImageCount: imageCount,
     apiHistory: $state.snapshot(session.history),
     signal: abortController.signal
   };
@@ -141,10 +153,14 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
     createImage: (blob, label, actionOpts) => ops.createImage(projectId, blob, label, actionOpts),
     getImage: ops.getImage,
     getImageThumbnail: ops.getImageThumbnail,
+    touchImages: (ids) => ops.touchImages(ids),
+    searchImages: (query) => ops.searchImages(projectId, query),
     getAgentMemory: (slug) => ops.getAgentMemory(projectId, slug),
     listAgentMemories: () => ops.listAgentMemories(projectId),
     upsertAgentMemory: (slug, title, summary, content) =>
-      ops.upsertAgentMemory(projectId, slug, title, summary, content)
+      ops.upsertAgentMemory(projectId, slug, title, summary, content),
+    touchMemory: (slug) => ops.touchMemory(projectId, slug),
+    searchMemories: (query) => ops.searchMemories(projectId, query)
   };
 
   const onEvent = (event: EngineEvent) => {
