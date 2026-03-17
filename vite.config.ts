@@ -14,6 +14,9 @@ export default defineConfig({
     sequence: { concurrent: false },
     reporters: ['verbose'],
     disableConsoleIntercept: true,
-    env: { GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? '' }
+    env: {
+      GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? '',
+      EVAL_RUN_ID: new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, '')
+    }
   }
 });

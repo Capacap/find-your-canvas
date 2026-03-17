@@ -13,8 +13,8 @@
  * Run:  pnpm eval
  * Filter: pnpm eval -- -t "sunset"
  */
-import { describe, it, vi, beforeAll } from 'vitest';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { describe, it, vi } from 'vitest';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   createMockStores,
@@ -22,9 +22,8 @@ import {
   createContext
 } from './harness';
 import { loadScenarios } from './scenario-loader';
+import { getRunDir } from './run-dir';
 import { buildContextDump } from '$lib/engine/context-dump';
-
-const TRACE_DIR = join(import.meta.dirname, 'traces');
 
 // ── Mocks ──
 
@@ -57,10 +56,6 @@ const scenarios = loadScenarios('orchestrator');
 const apiKey = process.env.GEMINI_API_KEY;
 
 describe.skipIf(!apiKey)('Orchestrator dispatch quality', () => {
-  beforeAll(() => {
-    mkdirSync(TRACE_DIR, { recursive: true });
-  });
-
   for (const scenario of scenarios) {
     it(scenario.name, async () => {
       const { runAgentTurn } = await import('$lib/engine/turn');
@@ -85,7 +80,7 @@ describe.skipIf(!apiKey)('Orchestrator dispatch quality', () => {
       );
 
       const slug = scenario.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
-      writeFileSync(join(TRACE_DIR, `${slug}.txt`), text, 'utf-8');
+      writeFileSync(join(getRunDir(), `${slug}.txt`), text, 'utf-8');
     });
   }
 });

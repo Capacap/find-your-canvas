@@ -12,8 +12,8 @@
  * Run:  pnpm eval
  * Filter: pnpm eval -- -t "forest"
  */
-import { describe, it, vi, beforeAll } from 'vitest';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { describe, it, vi } from 'vitest';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Content } from '@google/genai';
 import {
@@ -25,6 +25,7 @@ import {
   PLACEHOLDER_PNG
 } from './harness';
 import { loadScenarios } from './scenario-loader';
+import { getRunDir } from './run-dir';
 import { buildContextDump } from '$lib/engine/context-dump';
 
 // ── Mocks ──
@@ -56,15 +57,10 @@ vi.mock('$lib/utils', () => ({
 
 // ── Runner ──
 
-const TRACE_DIR = join(import.meta.dirname, 'traces');
 const scenarios = loadScenarios('specialist');
 const apiKey = process.env.GEMINI_API_KEY;
 
 describe.skipIf(!apiKey)('Specialist prompt quality', () => {
-  beforeAll(() => {
-    mkdirSync(TRACE_DIR, { recursive: true });
-  });
-
   for (const scenario of scenarios) {
     it(scenario.name, async () => {
       const { runSubagent } = await import('$lib/engine/subagent');
@@ -125,7 +121,7 @@ describe.skipIf(!apiKey)('Specialist prompt quality', () => {
       }
 
       const slug = scenario.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
-      writeFileSync(join(TRACE_DIR, `${slug}.txt`), text, 'utf-8');
+      writeFileSync(join(getRunDir(), `${slug}.txt`), text, 'utf-8');
     });
   }
 });
