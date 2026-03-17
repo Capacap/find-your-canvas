@@ -21,7 +21,6 @@ import {
   createMockStores,
   createMockActions,
   createContext,
-  EventCollector,
   PLACEHOLDER_PNG
 } from './harness';
 import { buildContextDump } from '$lib/engine/context-dump';
@@ -171,8 +170,7 @@ describe.skipIf(!apiKey)('Orchestrator dispatch quality', () => {
         images: scenario.images
       });
 
-      const events = new EventCollector();
-      const result = await runAgentTurn(ctx, actions, scenario.userMessage, events.onEvent);
+      const result = await runAgentTurn(ctx, actions, scenario.userMessage, () => {});
 
       const { text } = buildContextDump(
         result.systemPrompt,

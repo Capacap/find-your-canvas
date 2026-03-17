@@ -1,9 +1,8 @@
 /**
  * Renders Gemini Content[] history into a human-readable context dump.
  *
- * Extracted from the debug interface so the eval harness can produce
- * identical output. All functions operate on plain Content[] arrays
- * with no UI or database dependencies.
+ * Pure functions operating on Content[] arrays with no UI or database
+ * dependencies. Used by both the debug interface and the eval harness.
  */
 import type { Content } from '@google/genai';
 
@@ -80,8 +79,19 @@ function isPlainTextPart(part: any): boolean {
     && !part.thought && !part.thoughtSignature && !!part.text;
 }
 
-/** Render a Content[] history into lines, accumulating image stats. */
-export function renderHistory(history: Content[], lines: string[], imageStats: { count: number; kb: number }): void {
+/**
+ * Render a Content[] history into lines, accumulating image stats.
+ *
+ * The optional afterPart callback fires after each rendered part,
+ * receiving the raw part, the output lines array, and a flush function.
+ * buildContextDump uses this to insert subagent traces inline.
+ */
+function renderHistory(
+  history: Content[],
+  lines: string[],
+  imageStats: { count: number; kb: number },
+  afterPart?: (part: any, lines: string[], flush: () => void) => void
+): void {
   let currentLabel = '';
   let pendingText = '';
 
@@ -140,6 +150,8 @@ export function renderHistory(history: Content[], lines: string[], imageStats: {
           flushText();
           lines.push(text);
         }
+
+        if (afterPart) afterPart(part, lines, flushText);
       }
     }
   }
@@ -168,88 +180,26 @@ export function buildContextDump(
     }
   }
 
-  let currentLabel = '';
-  let pendingText = '';
+  renderHistory(history, lines, imageStats, (part, lines, flush) => {
+    if (!part.functionCall) return;
+    const callId = part.functionCall.id;
+    const callName = part.functionCall.name ?? '';
+    if (!callId || !callName.startsWith('dispatch_') || !subagentByDispatchId.has(callId)) return;
 
-  function flushText() {
-    if (pendingText) {
-      lines.push(pendingText);
-      pendingText = '';
+    flush();
+    const sub = subagentByDispatchId.get(callId)!;
+    lines.push('');
+    lines.push(`    ╭── SUBAGENT: ${sub.agentType} (dispatch: ${sub.dispatchId}) ──`);
+    lines.push(`    │ System prompt: ${sub.systemPrompt.slice(0, 100)}...`);
+    const subLines: string[] = [];
+    renderHistory(sub.history, subLines, imageStats);
+    for (const sl of subLines) {
+      lines.push(`    │ ${sl}`);
     }
-  }
+    lines.push(`    ╰── END SUBAGENT ──`);
+    lines.push('');
+  });
 
-  for (const content of history) {
-    if (!content.parts || content.parts.length === 0) continue;
-
-    const parts = content.parts as any[];
-
-    for (const part of parts) {
-      const imgs = countPartImages(part);
-      imageStats.count += imgs.count;
-      imageStats.kb += imgs.kb;
-    }
-
-    const role = content.role ?? 'unknown';
-    const hasNonCallContent = parts.some((p: any) => !p.functionCall && renderPart(p) !== null);
-    const hasCalls = parts.some((p: any) => p.functionCall);
-
-    const sections: { label: string; parts: any[] }[] = [];
-
-    if (role === 'model' && hasNonCallContent && hasCalls) {
-      sections.push(
-        { label: 'MODEL', parts: parts.filter((p: any) => !p.functionCall) },
-        { label: 'TOOL CALLS', parts: parts.filter((p: any) => p.functionCall) }
-      );
-    } else {
-      sections.push({ label: contentLabel(content), parts });
-    }
-
-    for (const section of sections) {
-      const rendered: { part: any; text: string }[] = [];
-      for (const part of section.parts) {
-        const text = renderPart(part);
-        if (text !== null) rendered.push({ part, text });
-      }
-      if (rendered.length === 0) continue;
-
-      if (section.label !== currentLabel) {
-        flushText();
-        if (currentLabel) lines.push('');
-        lines.push(`--- ${section.label} ---`);
-        currentLabel = section.label;
-      }
-
-      for (const { part, text } of rendered) {
-        if (isPlainTextPart(part)) {
-          pendingText += text;
-        } else {
-          flushText();
-          lines.push(text);
-        }
-
-        if (part.functionCall) {
-          const callId = part.functionCall.id;
-          const callName = part.functionCall.name ?? '';
-          if (callId && callName.startsWith('dispatch_') && subagentByDispatchId.has(callId)) {
-            flushText();
-            const sub = subagentByDispatchId.get(callId)!;
-            lines.push('');
-            lines.push(`    ╭── SUBAGENT: ${sub.agentType} (dispatch: ${sub.dispatchId}) ──`);
-            lines.push(`    │ System prompt: ${sub.systemPrompt.slice(0, 100)}...`);
-            const subLines: string[] = [];
-            renderHistory(sub.history, subLines, imageStats);
-            for (const sl of subLines) {
-              lines.push(`    │ ${sl}`);
-            }
-            lines.push(`    ╰── END SUBAGENT ──`);
-            lines.push('');
-          }
-        }
-      }
-    }
-  }
-
-  flushText();
   lines.push('');
   return { text: lines.join('\n'), imageCount: imageStats.count, imageTotalKB: imageStats.kb };
 }

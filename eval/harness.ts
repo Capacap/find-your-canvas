@@ -1,8 +1,8 @@
 /**
  * Eval harness for testing agent prompts against real Gemini API calls.
  *
- * Provides mock TurnActions (in-memory storage), a trace collector that
- * captures engine events, and helpers for building TurnContext. The Gemini
+ * Provides mock TurnActions (in-memory storage), an event collector for
+ * programmatic assertions, and helpers for building TurnContext. The Gemini
  * text model is called for real; image generation and subagent execution
  * are mocked so we can inspect what the agents write without burning
  * image API credits.
@@ -222,7 +222,7 @@ export function instrumentDefinition(
     wrappedHandlers[name] = async (toolName, callId, args, ctx, actions, onEvent) => {
       trace.toolCalls.push({ name, args: { ...args } });
 
-      // Capture generate_image prompts (the main eval output).
+      // Capture generate_image prompts for assertions.
       if (name === 'generate_image') {
         trace.generations.push({
           prompt: (args.prompt as string) ?? '',
