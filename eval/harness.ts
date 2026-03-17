@@ -153,76 +153,27 @@ export function createMockActions(stores: MockStores): TurnActions {
   };
 }
 
-// ── Trace collector ──
+// ── Event collector ──
 
-interface TraceRound {
-  round: number;
-  thought: string;
-  text: string;
-  toolCalls: Array<{ name: string; args: Record<string, unknown> }>;
-  toolResults: Array<{ name: string; result: unknown }>;
-}
-
-export interface Trace {
-  scenario: string;
-  userMessage: string;
-  rounds: TraceRound[];
-  dispatches: Array<{ agentType: string; prompt: string }>;
-  finalText: string;
+/**
+ * Listens to EngineEvents during a turn. The collected events are not
+ * used for trace output (context dumps handle that), but they're still
+ * useful for programmatic assertions in tests (e.g. checking which
+ * dispatch tool was called, or extracting dispatch prompts).
+ */
+export class EventCollector {
+  dispatches: Array<{ agentType: string; prompt: string }> = [];
+  finalText = '';
   error?: string;
-}
-
-export class TraceCollector {
-  private rounds: TraceRound[] = [];
-  private currentRound: TraceRound | null = null;
-  private dispatches: Array<{ agentType: string; prompt: string }> = [];
-  private finalText = '';
-  private error?: string;
 
   onEvent = (event: EngineEvent): void => {
     switch (event.type) {
-      case 'debug_request':
-        this.currentRound = {
-          round: event.round,
-          thought: '',
-          text: '',
-          toolCalls: [],
-          toolResults: []
-        };
-        this.rounds.push(this.currentRound);
-        break;
-
-      case 'debug_thought':
-        if (this.currentRound) this.currentRound.thought = event.text;
-        break;
-
-      case 'debug_response':
-        if (this.currentRound) this.currentRound.text = event.text;
-        break;
-
-      case 'debug_tool_exec': {
-        if (this.currentRound) {
-          this.currentRound.toolCalls.push({
-            name: event.name,
-            args: event.args
-          });
-        }
-        // Capture dispatch prompts.
+      case 'debug_tool_exec':
         if (event.name === 'dispatch_text_to_image' || event.name === 'dispatch_image_to_image') {
           const agentType = event.name === 'dispatch_text_to_image' ? 'text-to-image' : 'image-to-image';
           this.dispatches.push({
             agentType,
             prompt: (event.args.prompt as string) ?? ''
-          });
-        }
-        break;
-      }
-
-      case 'debug_tool_result':
-        if (this.currentRound) {
-          this.currentRound.toolResults.push({
-            name: event.name,
-            result: event.result
           });
         }
         break;
@@ -236,91 +187,6 @@ export class TraceCollector {
         break;
     }
   };
-
-  toTrace(scenario: string, userMessage: string): Trace {
-    return {
-      scenario,
-      userMessage,
-      rounds: this.rounds,
-      dispatches: this.dispatches,
-      finalText: this.finalText,
-      error: this.error
-    };
-  }
-}
-
-// ── Trace formatting ──
-
-export function formatTrace(trace: Trace): string {
-  const lines: string[] = [];
-  const sep = '═'.repeat(70);
-  const thin = '─'.repeat(70);
-
-  lines.push(sep);
-  lines.push(`  SCENARIO: ${trace.scenario}`);
-  lines.push(`  USER: ${trace.userMessage}`);
-  lines.push(sep);
-
-  // Dispatches first (the main thing we're evaluating).
-  if (trace.dispatches.length > 0) {
-    lines.push('');
-    lines.push('  DISPATCHES:');
-    for (let i = 0; i < trace.dispatches.length; i++) {
-      const d = trace.dispatches[i];
-      lines.push(thin);
-      lines.push(`  [${i + 1}] ${d.agentType}`);
-      lines.push('');
-      // Indent the dispatch prompt for readability.
-      for (const line of d.prompt.split('\n')) {
-        lines.push(`    ${line}`);
-      }
-    }
-    lines.push(thin);
-  }
-
-  // Full trace for context.
-  lines.push('');
-  lines.push('  TRACE:');
-
-  for (const round of trace.rounds) {
-    lines.push('');
-    lines.push(`  ── Round ${round.round} ──`);
-
-    if (round.thought) {
-      lines.push(`  [thought] ${truncate(round.thought, 200)}`);
-    }
-
-    if (round.text) {
-      lines.push(`  [text] ${round.text}`);
-    }
-
-    for (const call of round.toolCalls) {
-      if (call.name.startsWith('dispatch_')) {
-        lines.push(`  [tool] ${call.name} → (see DISPATCHES above)`);
-      } else {
-        const argStr = JSON.stringify(call.args, null, 2)
-          .split('\n')
-          .map((l, i) => (i === 0 ? l : `         ${l}`))
-          .join('\n');
-        lines.push(`  [tool] ${call.name} ${argStr}`);
-      }
-    }
-  }
-
-  if (trace.error) {
-    lines.push('');
-    lines.push(`  ERROR: ${trace.error}`);
-  }
-
-  lines.push('');
-  lines.push(sep);
-
-  return lines.join('\n');
-}
-
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max) + '...';
 }
 
 // ── Subagent trace ──
@@ -382,78 +248,6 @@ export function instrumentDefinition(
 
 export function createSubagentTrace(scenario: string, agentType: string, dispatch: string): SubagentTrace {
   return { scenario, agentType, dispatch, generations: [], toolCalls: [], handoffText: '' };
-}
-
-/** Format a specialist trace with generation prompts highlighted. */
-export function formatSubagentTrace(trace: SubagentTrace): string {
-  const lines: string[] = [];
-  const sep = '═'.repeat(70);
-  const thin = '─'.repeat(70);
-
-  lines.push(sep);
-  lines.push(`  SCENARIO: ${trace.scenario}`);
-  lines.push(`  AGENT: ${trace.agentType}`);
-  lines.push(sep);
-
-  // Dispatch input (what the orchestrator sent).
-  lines.push('');
-  lines.push('  DISPATCH:');
-  lines.push(thin);
-  for (const line of trace.dispatch.split('\n')) {
-    lines.push(`    ${line}`);
-  }
-  lines.push(thin);
-
-  // Generation prompts (the main thing we're evaluating).
-  if (trace.generations.length > 0) {
-    lines.push('');
-    lines.push('  GENERATION PROMPTS:');
-    for (let i = 0; i < trace.generations.length; i++) {
-      const g = trace.generations[i];
-      lines.push(thin);
-      lines.push(`  [${i + 1}] label: "${g.label}"  aspect: ${g.aspectRatio ?? 'default'}  refs: ${g.referenceIds.length > 0 ? g.referenceIds.join(', ') : 'none'}`);
-      lines.push('');
-      for (const line of g.prompt.split('\n')) {
-        lines.push(`    ${line}`);
-      }
-    }
-    lines.push(thin);
-  }
-
-  // Handoff summary.
-  if (trace.handoffText) {
-    lines.push('');
-    lines.push('  HANDOFF:');
-    lines.push(thin);
-    for (const line of trace.handoffText.split('\n')) {
-      lines.push(`    ${line}`);
-    }
-    lines.push(thin);
-  }
-
-  // All tool calls for context.
-  lines.push('');
-  lines.push('  TOOL CALLS:');
-  for (const call of trace.toolCalls) {
-    if (call.name === 'generate_image') {
-      lines.push(`  - ${call.name} → (see GENERATION PROMPTS above)`);
-    } else if (call.name === 'handoff') {
-      lines.push(`  - ${call.name} → (see HANDOFF above)`);
-    } else {
-      const summary = JSON.stringify(call.args);
-      lines.push(`  - ${call.name} ${truncate(summary, 100)}`);
-    }
-  }
-
-  if (trace.error) {
-    lines.push('');
-    lines.push(`  ERROR: ${trace.error}`);
-  }
-
-  lines.push('');
-  lines.push(sep);
-
-  return lines.join('\n');
 }
 
 // ── Context builder ──

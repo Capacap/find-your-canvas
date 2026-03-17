@@ -13,6 +13,7 @@ export default defineConfig({
     hookTimeout: 30_000,
     sequence: { concurrent: false },
     reporters: ['verbose'],
-    disableConsoleIntercept: true
+    disableConsoleIntercept: true,
+    env: { GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? '' }
   }
 });

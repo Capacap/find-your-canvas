@@ -6,6 +6,9 @@
  * mocked so we can inspect the generation prompts the specialists write
  * without burning image API credits.
  *
+ * Output is a context dump: the specialist's system instruction followed
+ * by its full Content[] history, matching the debug interface snapshot.
+ *
  * Run:  pnpm eval
  * Filter: pnpm eval -- -t "forest"
  */
@@ -19,9 +22,9 @@ import {
   createContext,
   createSubagentTrace,
   instrumentDefinition,
-  formatSubagentTrace,
   PLACEHOLDER_PNG
 } from './harness';
+import { buildContextDump } from '$lib/engine/context-dump';
 
 // ── Mocks ──
 
@@ -216,7 +219,6 @@ describe.skipIf(!apiKey)('Specialist prompt quality', () => {
         images: scenario.images
       });
 
-      // Build the specialist definition.
       const getAgent = scenario.agentType === 'text-to-image'
         ? getTextToImageAgent
         : getImageToImageAgent;
@@ -228,9 +230,12 @@ describe.skipIf(!apiKey)('Specialist prompt quality', () => {
         ctx.totalImageCount
       );
 
-      // Instrument handlers to capture tool calls.
+      // Instrument handlers to capture generation prompts for assertions.
       const trace = createSubagentTrace(scenario.name, scenario.agentType, scenario.dispatch);
       const instrumented = instrumentDefinition(definition, trace);
+
+      let systemPrompt = instrumented.systemPrompt;
+      let history: import('@google/genai').Content[] = [];
 
       try {
         const result = await runSubagent(
@@ -238,22 +243,23 @@ describe.skipIf(!apiKey)('Specialist prompt quality', () => {
           scenario.dispatch,
           ctx,
           actions,
-          () => {} // No UI events needed.
+          () => {}
         );
 
-        // If handoff wasn't captured by instrumentation, take it from the result.
         if (!trace.handoffText && result.text) {
           trace.handoffText = result.text;
         }
+
+        systemPrompt = result.systemPrompt;
+        history = result.history;
       } catch (err) {
         trace.error = err instanceof Error ? err.message : String(err);
       }
 
-      const formatted = formatSubagentTrace(trace);
+      const { text } = buildContextDump(systemPrompt, history);
 
-      // Write trace file.
       const slug = scenario.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
-      writeFileSync(join(TRACE_DIR, `${slug}.txt`), formatted, 'utf-8');
+      writeFileSync(join(TRACE_DIR, `${slug}.txt`), text, 'utf-8');
     });
   }
 });

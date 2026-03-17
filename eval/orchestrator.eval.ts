@@ -6,6 +6,10 @@
  * briefs the orchestrator writes without running specialists or burning
  * image generation credits.
  *
+ * Output is a context dump identical to the debug interface snapshot:
+ * system instruction followed by the full Content[] history with
+ * subagent sessions inlined at their dispatch points.
+ *
  * Run:  pnpm eval
  * Filter: pnpm eval -- -t "sunset"
  */
@@ -17,10 +21,10 @@ import {
   createMockStores,
   createMockActions,
   createContext,
-  TraceCollector,
-  formatTrace,
+  EventCollector,
   PLACEHOLDER_PNG
 } from './harness';
+import { buildContextDump } from '$lib/engine/context-dump';
 
 const TRACE_DIR = join(import.meta.dirname, 'traces');
 
@@ -167,15 +171,17 @@ describe.skipIf(!apiKey)('Orchestrator dispatch quality', () => {
         images: scenario.images
       });
 
-      const trace = new TraceCollector();
-      await runAgentTurn(ctx, actions, scenario.userMessage, trace.onEvent);
+      const events = new EventCollector();
+      const result = await runAgentTurn(ctx, actions, scenario.userMessage, events.onEvent);
 
-      const result = trace.toTrace(scenario.name, scenario.userMessage);
-      const formatted = formatTrace(result);
+      const { text } = buildContextDump(
+        result.systemPrompt,
+        result.apiHistory,
+        result.subagentSessions
+      );
 
-      // Write individual trace file.
       const slug = scenario.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
-      writeFileSync(join(TRACE_DIR, `${slug}.txt`), formatted, 'utf-8');
+      writeFileSync(join(TRACE_DIR, `${slug}.txt`), text, 'utf-8');
     });
   }
 });
