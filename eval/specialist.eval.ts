@@ -16,6 +16,7 @@ import { describe, it, vi, beforeAll } from 'vitest';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentMemory, ImageMeta } from '$lib/types/schema';
+import type { Content } from '@google/genai';
 import {
   createMockStores,
   createMockActions,
@@ -235,7 +236,7 @@ describe.skipIf(!apiKey)('Specialist prompt quality', () => {
       const instrumented = instrumentDefinition(definition, trace);
 
       let systemPrompt = instrumented.systemPrompt;
-      let history: import('@google/genai').Content[] = [];
+      let history: Content[] = [];
 
       try {
         const result = await runSubagent(
@@ -256,7 +257,10 @@ describe.skipIf(!apiKey)('Specialist prompt quality', () => {
         trace.error = err instanceof Error ? err.message : String(err);
       }
 
-      const { text } = buildContextDump(systemPrompt, history);
+      let { text } = buildContextDump(systemPrompt, history);
+      if (trace.error) {
+        text += `\n=== ERROR ===\n\n${trace.error}\n`;
+      }
 
       const slug = scenario.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
       writeFileSync(join(TRACE_DIR, `${slug}.txt`), text, 'utf-8');

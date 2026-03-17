@@ -5,14 +5,10 @@
  * dependencies. Used by both the debug interface and the eval harness.
  */
 import type { Content } from '@google/genai';
+import type { AgentSession } from '$lib/types/schema';
 
-/** Minimal shape for subagent sessions inlined into the dump. */
-export interface SubagentSession {
-  agentType: string;
-  dispatchId?: string;
-  systemPrompt: string;
-  history: Content[];
-}
+/** The subset of AgentSession fields needed for inline rendering. */
+type SubagentSession = Pick<AgentSession, 'agentType' | 'dispatchId' | 'systemPrompt' | 'history'>;
 
 export interface ContextDumpResult {
   text: string;
@@ -83,8 +79,8 @@ function isPlainTextPart(part: any): boolean {
  * Render a Content[] history into lines, accumulating image stats.
  *
  * The optional afterPart callback fires after each rendered part,
- * receiving the raw part, the output lines array, and a flush function.
- * buildContextDump uses this to insert subagent traces inline.
+ * receiving the raw part, the output lines array, and a function
+ * that flushes any buffered plain-text content.
  */
 function renderHistory(
   history: Content[],

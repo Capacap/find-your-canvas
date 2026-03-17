@@ -7,7 +7,7 @@
  * are mocked so we can inspect what the agents write without burning
  * image API credits.
  */
-import type { TurnContext, TurnActions, EngineEvent, AgentDefinition, ToolHandler } from '$lib/engine/types';
+import type { TurnContext, TurnActions, AgentDefinition, ToolHandler } from '$lib/engine/types';
 import type { AgentMemory, ImageMeta, ImageBlob, ImageSource } from '$lib/types/schema';
 import { TEXT_MODEL, IMAGE_MODEL } from '$lib/types/schema';
 
@@ -149,42 +149,6 @@ export function createMockActions(stores: MockStores): TurnActions {
         }
       }
       return results;
-    }
-  };
-}
-
-// ── Event collector ──
-
-/**
- * Listens to EngineEvents during a turn. The collected events are not
- * used for trace output (context dumps handle that), but they're still
- * useful for programmatic assertions in tests (e.g. checking which
- * dispatch tool was called, or extracting dispatch prompts).
- */
-export class EventCollector {
-  dispatches: Array<{ agentType: string; prompt: string }> = [];
-  finalText = '';
-  error?: string;
-
-  onEvent = (event: EngineEvent): void => {
-    switch (event.type) {
-      case 'debug_tool_exec':
-        if (event.name === 'dispatch_text_to_image' || event.name === 'dispatch_image_to_image') {
-          const agentType = event.name === 'dispatch_text_to_image' ? 'text-to-image' : 'image-to-image';
-          this.dispatches.push({
-            agentType,
-            prompt: (event.args.prompt as string) ?? ''
-          });
-        }
-        break;
-
-      case 'error':
-        this.error = event.message;
-        break;
-
-      case 'done':
-        this.finalText = event.assistantText;
-        break;
     }
   };
 }
