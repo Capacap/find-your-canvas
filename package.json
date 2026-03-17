@@ -13,7 +13,9 @@
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-		"eval": "vitest run eval/"
+		"eval": "vitest run eval/orchestrator.eval.ts eval/specialist.eval.ts",
+		"eval:judge": "vitest run eval/judge.eval.ts",
+		"eval:all": "pnpm eval && pnpm eval:judge"
 	},
 	"pnpm": {
 		"onlyBuiltDependencies": [

@@ -11,5 +11,6 @@
       "generationContext": "Kael standing in a sunlit forest clearing, afternoon light, stylized realism",
       "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
     }
-  ]
+  ],
+  "successCriteria": "The specialist should view the source image before generating. The brief requests two changes (add campfire, change time of day). The specialist should handle both changes, either in a single generation or sequential operations. The generation prompt(s) should mention the campfire placement (foreground, left of center), the time-of-day shift (afternoon to evening, warm sky colors), and preservation of the character and forest background. After generating, it should view results and handoff."
 }

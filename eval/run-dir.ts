@@ -8,7 +8,7 @@
  * idempotently so the first worker to arrive creates them and
  * subsequent workers reuse the directory.
  */
-import { mkdirSync, writeFileSync, existsSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, rmSync, symlinkSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 import { TEXT_MODEL, IMAGE_MODEL } from '$lib/types/schema';
@@ -31,6 +31,20 @@ function getGitInfo(): { commit: string; dirty: boolean } {
   } catch {
     return { commit: 'unknown', dirty: false };
   }
+}
+
+/**
+ * Resolve an existing run directory by ID, or fall back to the `latest` symlink.
+ * Returns null if no run can be found.
+ */
+export function resolveRunDir(runId?: string): string | null {
+  if (runId) {
+    const dir = join(TRACES_ROOT, runId);
+    return existsSync(dir) ? dir : null;
+  }
+  const latestLink = join(TRACES_ROOT, 'latest');
+  if (!existsSync(latestLink)) return null;
+  return realpathSync(latestLink);
 }
 
 let runDir: string | null = null;

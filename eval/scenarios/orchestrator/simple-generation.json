@@ -1,5 +1,6 @@
 {
   "name": "Simple generation request",
   "agent": "orchestrator",
-  "prompt": "Generate a sunset over the ocean."
+  "prompt": "Generate a sunset over the ocean.",
+  "successCriteria": "The orchestrator should ask at least one clarifying question before dispatching, since 'sunset over the ocean' is underspecified (mood, vantage point, style, and color palette are all unresolved). It should not dispatch immediately. Questions should target creative decisions like mood, composition, or rendering style rather than restating the request."
 }

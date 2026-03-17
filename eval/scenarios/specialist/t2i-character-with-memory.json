@@ -9,5 +9,6 @@
       "summary": "Main character: Kael, lean build, dark skin, silver-white dreadlocks, amber eyes, wears a weathered brown leather jacket.",
       "content": "# Kael\n\nLean build, early 30s. Dark brown skin, silver-white dreadlocks pulled back. Amber eyes. Always wears a weathered brown leather jacket with brass buckles. Carries a satchel covered in patches. Has a thin scar across the bridge of his nose.\n\n## Style notes\nSlightly stylized realism, warm color palette, visible brushstrokes."
     }
-  ]
+  ],
+  "successCriteria": "The specialist should read the 'protagonist' memory to get Kael's full appearance details. The generation prompt should include Kael's distinguishing features: dark brown skin, silver-white dreadlocks, amber eyes, leather jacket with brass buckles, scar across nose. It should use the established style (stylized realism, warm palette, visible brushstrokes). The prompt should frame a medium close-up showing weathered/travel-worn appearance. After generating, it should view the result and handoff with observations."
 }

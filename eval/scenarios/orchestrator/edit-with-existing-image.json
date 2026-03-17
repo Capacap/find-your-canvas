@@ -11,5 +11,6 @@
       "generationContext": "A warm sunset over a sandy beach with gentle waves",
       "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
     }
-  ]
+  ],
+  "successCriteria": "The orchestrator should dispatch an image-to-image task (not text-to-image) since this is an edit of an existing image. The dispatch should reference [image:img-001] as the source image. It should view the image before dispatching. The brief should specify what to change (darker sky) and what to preserve (the rest of the scene)."
 }

@@ -96,6 +96,13 @@ function hydrateScenario(raw: ScenarioJson): Scenario {
   };
 }
 
+// ── Utilities ──
+
+/** Convert a scenario name to a filesystem-safe slug. */
+export function slugify(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
+}
+
 // ── Loader ──
 
 function loadScenariosFromDir(dir: string): Scenario[] {

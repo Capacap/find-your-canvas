@@ -24,7 +24,7 @@ import {
   instrumentDefinition,
   PLACEHOLDER_PNG
 } from './harness';
-import { loadScenarios } from './scenario-loader';
+import { loadScenarios, slugify } from './scenario-loader';
 import { getRunDir } from './run-dir';
 import { buildContextDump } from '$lib/engine/context-dump';
 
@@ -120,7 +120,7 @@ describe.skipIf(!apiKey)('Specialist prompt quality', () => {
         text += `\n=== ERROR ===\n\n${trace.error}\n`;
       }
 
-      const slug = scenario.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
+      const slug = slugify(scenario.name);
       writeFileSync(join(getRunDir(), `${slug}.txt`), text, 'utf-8');
     });
   }

@@ -11,5 +11,6 @@
       "generationContext": "A warm sunset over a sandy beach with gentle waves",
       "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
     }
-  ]
+  ],
+  "successCriteria": "The specialist should view the source image before generating. The generation prompt should specify darkening the sky to twilight while preserving beach, waves, and sand. The source image (img-sunset) should be passed as a reference image. The prompt should mention adjusting water reflections to match the darker sky. After generating, it should view the result and handoff with observations about whether the edit preserved the non-sky elements."
 }

@@ -26,5 +26,6 @@
       "label": "style_reference",
       "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
     }
-  ]
+  ],
+  "successCriteria": "The orchestrator should view all three referenced images before dispatching. The dispatch should be text-to-image (compositing multiple references into a new scene). The brief must specify what to take from each image: character from img-char, environment from img-bg, rendering style from img-style. All three image IDs should be included as references in the dispatch."
 }

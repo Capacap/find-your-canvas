@@ -26,5 +26,6 @@
       "label": "style_reference",
       "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
     }
-  ]
+  ],
+  "successCriteria": "The specialist should view all three reference images before generating. The generation prompt should specify what to draw from each reference: character details from img-char, forest atmosphere and scale from img-bg, rendering style from img-style. All three image IDs should be passed as reference_image_ids. The prompt should describe the composition (Kael walking, mid-stride, forest dwarfing the character). After generating, it should view the result and handoff."
 }
