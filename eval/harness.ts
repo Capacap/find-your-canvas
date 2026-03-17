@@ -94,7 +94,9 @@ export function createMockActions(stores: MockStores): TurnActions {
           blob: placeholderBlob
         });
       }
-      return { base64: PLACEHOLDER_PNG, mimeType: 'image/png' };
+      const entry = stores.images.get(id)!;
+      const buffer = Buffer.from(await entry.thumbnail.arrayBuffer());
+      return { base64: buffer.toString('base64'), mimeType: entry.mimeType };
     },
 
     async touchImages(_ids: string[]): Promise<void> {},

@@ -1,0 +1,15 @@
+{
+  "name": "Edit request with existing image",
+  "agent": "orchestrator",
+  "prompt": "Make the sky darker in [image:img-001].",
+  "images": [
+    {
+      "id": "img-001",
+      "source": "generated",
+      "mimeType": "image/png",
+      "label": "sunset_beach",
+      "generationContext": "A warm sunset over a sandy beach with gentle waves",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
+    }
+  ]
+}

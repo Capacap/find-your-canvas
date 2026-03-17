@@ -1,0 +1,13 @@
+{
+  "name": "Generation with memory context",
+  "agent": "orchestrator",
+  "prompt": "Draw our protagonist exploring the forest.",
+  "memories": [
+    {
+      "slug": "protagonist",
+      "title": "Protagonist",
+      "summary": "Main character: Kael, lean build, dark skin, silver-white dreadlocks, amber eyes, wears a weathered brown leather jacket.",
+      "content": "# Kael\n\nLean build, early 30s. Dark brown skin, silver-white dreadlocks pulled back. Amber eyes. Always wears a weathered brown leather jacket with brass buckles. Carries a satchel covered in patches. Has a thin scar across the bridge of his nose.\n\n## Style notes\nSlightly stylized realism, warm color palette, visible brushstrokes."
+    }
+  ]
+}

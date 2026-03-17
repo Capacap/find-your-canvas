@@ -1,0 +1,5 @@
+{
+  "name": "T2I: Simple scene from brief",
+  "agent": "text-to-image",
+  "prompt": "The user wants a moody establishing shot of a canyon at dusk to set the tone for a story scene. The canyon should feel vast and ancient. Warm color palette shifting to cool at the top of the sky. No characters in frame. The mood should be contemplative, not threatening."
+}

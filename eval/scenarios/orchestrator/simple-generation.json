@@ -1,0 +1,5 @@
+{
+  "name": "Simple generation request",
+  "agent": "orchestrator",
+  "prompt": "Generate a sunset over the ocean."
+}

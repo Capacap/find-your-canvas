@@ -1,0 +1,15 @@
+{
+  "name": "I2I: Simple edit",
+  "agent": "image-to-image",
+  "prompt": "Darken the sky in [image:img-sunset] to a deep twilight. Preserve the beach, waves, and sand colors. The lighting on the water should shift to reflect the darker sky naturally.",
+  "images": [
+    {
+      "id": "img-sunset",
+      "source": "generated",
+      "mimeType": "image/png",
+      "label": "sunset_beach",
+      "generationContext": "A warm sunset over a sandy beach with gentle waves",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
+    }
+  ]
+}
