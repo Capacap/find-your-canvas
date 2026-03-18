@@ -1,0 +1,6 @@
+{
+  "name": "Memory write: project directive",
+  "agent": "orchestrator",
+  "prompt": "This project uses a dark fantasy aesthetic with muted earth tones and dramatic chiaroscuro lighting. All characters should look weathered and lived-in, no clean or pristine looks.",
+  "successCriteria": "Score 3 (acceptable): Calls update_memory to store the style directive. The memory content captures the core decisions (dark fantasy, muted earth tones, chiaroscuro, weathered characters).\n\nScore 5 (excellent): Calls update_memory with a well-organized topic (e.g., slug 'art-style'). Memory content faithfully captures all stated decisions: dark fantasy aesthetic, muted earth tones, chiaroscuro lighting, weathered/lived-in character look, no pristine looks. Does not add creative decisions the user did not make. Acknowledges the directive conversationally without being performatively enthusiastic. Does not dispatch an image (this was a statement about the project, not a generation request).\n\nBelow 3: Does not call update_memory. Or dispatches an image instead of recording the decision. Or stores only a partial version of what the user said (missing key constraints like 'no pristine looks')."
+}

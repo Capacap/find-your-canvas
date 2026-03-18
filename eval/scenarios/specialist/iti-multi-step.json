@@ -1,0 +1,16 @@
+{
+  "name": "ITI: multi-step decomposition",
+  "agent": "image-to-image",
+  "prompt": "Three changes to [image:scene]: 1. Add a lantern hanging from the tree branch on the upper right. It should be lit with a warm amber glow that matches the existing style. 2. Change the character's jacket from blue to a deep burgundy red. 3. Add fireflies scattered through the midground, small points of warm light. Preserve everything else exactly as it is.",
+  "images": [
+    {
+      "id": "scene",
+      "source": "generated",
+      "mimeType": "image/png",
+      "label": "kael_forest_clearing_evening",
+      "generationContext": "Kael in a forest clearing at evening, cool blue lighting with warm accents, stylized realism",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
+    }
+  ],
+  "successCriteria": "Score 3 (acceptable): Views the source image. Makes at least two separate generate_image calls to handle the three changes. Each prompt addresses a subset of the requested changes.\n\nScore 5 (excellent): Views the source image before starting. Decomposes the three changes into sequential atomic operations (ideally three separate generate_image calls, one per change). Each call's prompt addresses exactly one change with explicit preservation boundaries for everything else. Chains outputs: the result of each generation becomes the reference input for the next (the second call's reference_image_ids contains the output of the first, not the original source). Views results during or after the sequence. Handoff describes what was changed at each step.\n\nBelow 3: Makes only one generate_image call attempting all three changes at once. Or does not chain outputs (uses the original source image for every call instead of the progressive result). Or does not view the source image."
+}

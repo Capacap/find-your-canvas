@@ -1,0 +1,20 @@
+{
+  "name": "Dispatch brief with memory context",
+  "agent": "orchestrator",
+  "prompt": "Generate a portrait of Kael standing on a cliff at sunset, looking out over the valley.",
+  "memories": [
+    {
+      "slug": "protagonist",
+      "title": "Protagonist: Kael",
+      "summary": "Physical appearance, clothing, and distinguishing features",
+      "content": "Kael is a tall, lean man in his mid-30s. Dark brown skin, silver-white dreadlocks pulled back loosely, amber eyes. A thin scar runs diagonally across his left cheek. He wears a weathered dark leather jacket over a charcoal henley, fingerless gloves, and a brass compass on a chain around his neck."
+    },
+    {
+      "slug": "art-style",
+      "title": "Art Style",
+      "summary": "Project rendering style and color conventions",
+      "content": "Stylized realism with visible brushstrokes. Warm color palette leaning toward amber, ochre, and muted reds. Skin tones rendered with care, avoiding flat or desaturated looks. Lighting should feel natural and painterly, not photographic."
+    }
+  ],
+  "successCriteria": "Score 3 (acceptable): Dispatches text-to-image. The brief mentions Kael's appearance and the sunset cliff setting. Reads at least one memory topic before dispatching.\n\nScore 5 (excellent): Reads both 'protagonist' and 'art-style' memories before dispatching. Character details (dark skin, silver-white dreadlocks, amber eyes, scar on left cheek, leather jacket, compass) appear directly in the brief rather than as instructions to check memory. Style decisions (stylized realism, warm palette, painterly brushstrokes) are baked into the brief. The brief conveys creative intent beyond restating the user's words, e.g., mood, atmosphere, or what matters most. Success criteria tell the specialist what to prioritize.\n\nBelow 3: Dispatches without reading memory. Or asks clarifying questions instead of dispatching (the request is specific enough). Or tells the specialist to 'check the protagonist memory' instead of including the details."
+}

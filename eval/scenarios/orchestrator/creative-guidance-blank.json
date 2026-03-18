@@ -1,0 +1,6 @@
+{
+  "name": "Creative guidance in blank project",
+  "agent": "orchestrator",
+  "prompt": "I want to make a character.",
+  "successCriteria": "Score 3 (acceptable): Does not dispatch immediately. Offers at least one concrete suggestion for the character's direction (e.g., a genre, aesthetic, or archetype) rather than only asking open-ended questions.\n\nScore 5 (excellent): Does not dispatch. Proposes two or more specific creative directions with reasoning and tradeoffs. For example: 'We could go with a grizzled sci-fi bounty hunter, which would let us play with worn textures and neon accents, or a fantasy ranger type where we can explore organic materials and earthy palettes.' Each option gives the user something concrete to react to. The response moves the conversation forward rather than putting the burden on the user to specify everything.\n\nBelow 3: Dispatches an image immediately from a vague request. Or asks only open-ended questions without offering any direction ('What style do you want? What genre? What mood?'). The key failure mode is deflection: making the user do all the creative work."
+}

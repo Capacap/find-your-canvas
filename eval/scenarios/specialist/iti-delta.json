@@ -1,0 +1,16 @@
+{
+  "name": "ITI: targeted lighting change",
+  "agent": "image-to-image",
+  "prompt": "Change the time of day in [image:scene] from afternoon to golden hour. The warm light should come from the left side, casting long shadows to the right. The character pose, forest environment, and all other elements should stay exactly as they are.",
+  "images": [
+    {
+      "id": "scene",
+      "source": "generated",
+      "mimeType": "image/png",
+      "label": "kael_forest_clearing_afternoon",
+      "generationContext": "Kael standing in a sunlit forest clearing, direct overhead afternoon light, stylized realism",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
+    }
+  ],
+  "successCriteria": "Score 3 (acceptable): Views the source image. Calls generate_image with the source in reference_image_ids. The prompt addresses the lighting change.\n\nScore 5 (excellent): Views the source image before generating. The generation prompt specifies the delta (time shift from afternoon to golden hour, light direction from left, long shadows to right) without redescribing the entire scene. Includes explicit preservation boundaries (character pose, forest, all other elements). The prompt is short and change-focused. If the prompt reads like it could generate the scene from scratch, that is a failure. Views the source and result together after generating. Handoff notes what changed and what was preserved.\n\nBelow 3: Does not view the source image. Or the prompt redescribes the entire scene instead of specifying the change. Or omits preservation boundaries."
+}

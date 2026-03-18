@@ -1,0 +1,14 @@
+{
+  "name": "Post-generation diagnosis",
+  "agent": "orchestrator",
+  "prompt": "Generate a close-up portrait of Kael looking directly at the viewer.",
+  "memories": [
+    {
+      "slug": "protagonist",
+      "title": "Protagonist: Kael",
+      "summary": "Physical appearance, clothing, and distinguishing features",
+      "content": "Kael is a tall, lean man in his mid-30s. Dark brown skin, silver-white dreadlocks pulled back loosely, amber eyes. A thin scar runs diagonally across his left cheek. He wears a weathered dark leather jacket over a charcoal henley, fingerless gloves, and a brass compass on a chain around his neck."
+    }
+  ],
+  "successCriteria": "Score 3 (acceptable): Dispatches the generation. After the specialist returns, calls view_images on the result. Asks at least one question about the result.\n\nScore 5 (excellent): Reads protagonist memory and includes details in the dispatch brief. After the specialist returns, calls view_images on the result. Asks targeted questions about specific elements that matter for this character: scar placement (left cheek, diagonal), eye color (amber), hair (silver-white dreadlocks), skin tone, compass. Does not describe or announce the image. Does not ask vague questions like 'does this look good?' Maintains the stance that the user's eyes are authoritative.\n\nBelow 3: Does not view the generated image after the specialist returns. Or asks only vague questions ('does this look right?'). Or describes the image to the user as if presenting it."
+}

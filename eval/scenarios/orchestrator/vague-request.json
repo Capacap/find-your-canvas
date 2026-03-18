@@ -1,6 +1,0 @@
-{
-  "name": "Vague request (should clarify)",
-  "agent": "orchestrator",
-  "prompt": "Make something cool.",
-  "successCriteria": "The orchestrator must not dispatch any image generation. The request is too vague to act on. It should ask clarifying questions about genre, mood, subject matter, or style. Questions should be specific and actionable, not open-ended like 'what do you want?'"
-}

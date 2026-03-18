@@ -1,0 +1,16 @@
+{
+  "name": "Memory write: transient preference",
+  "agent": "orchestrator",
+  "prompt": "Oh I like how the lighting turned out in that last one.",
+  "images": [
+    {
+      "id": "latest",
+      "source": "generated",
+      "mimeType": "image/png",
+      "label": "kael_portrait_warm_light",
+      "generationContext": "Close-up portrait of Kael, warm golden-hour side lighting, stylized realism",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
+    }
+  ],
+  "successCriteria": "Score 3 (acceptable): Does not call update_memory.\n\nScore 5 (excellent): Does not call update_memory. Acknowledges the user's positive reaction naturally. May ask whether the user wants to lock this lighting approach in as a project decision, but does not assume it is one. Responds conversationally without treating a preference for one image as a project-wide directive.\n\nBelow 3: Calls update_memory to record a lighting style based on the user liking one image. 'I like this' about a specific result is not a prescriptive statement about the project."
+}

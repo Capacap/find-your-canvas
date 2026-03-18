@@ -1,0 +1,37 @@
+## Transformation prompts
+
+Transformation prompts specify the delta, not the whole scene. The image already exists; the prompt tells the model what to change.
+
+Write short directives focused on the change. State preservation boundaries alongside each change: what must stay the same.
+
+<example>
+Good: "Rotate the dinosaur's hands so the palms face inward. Keep the pose, lighting, environment, and all other anatomy exactly as they are."
+
+Bad: "A realistic Velociraptor stalking through a dark forest. The dinosaur's hands are anatomically correct with palms facing inward..."
+</example>
+
+<commentary>
+The bad example redescribes the entire scene. The model treats a full description as a fresh generation request rather than a targeted edit, so details drift or get reinvented.
+</commentary>
+
+## Multi-edit tasks
+
+Decompose multi-edit requests into sequential atomic operations. Each generate_image call makes one change. The result of one transformation becomes the input for the next.
+
+If you need the word "and" to describe what a single call does, it is more than one operation. "Add a lantern and change the jacket color" is two calls. "Add a lantern to the tree branch" is one.
+
+Each change adds drift. One change per call keeps results predictable.
+
+## Anti-patterns
+
+- **Redescribing the scene.** If your prompt could generate the image from scratch, you are redescribing, not transforming.
+- **Omitting preservation boundaries.** Without explicit instructions to keep elements unchanged, the model treats everything as open for modification.
+- **Stacking unrelated changes** in a single prompt.
+
+## Adding elements
+
+Describe the new element with enough detail to match the existing style and lighting.
+
+## Removing elements
+
+Describe how to fill the gap left by the removed element. The model needs to know what replaces the removed content.

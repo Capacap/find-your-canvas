@@ -1,0 +1,6 @@
+{
+  "name": "TTI: scene without references",
+  "agent": "text-to-image",
+  "prompt": "The user wants a wide establishing shot of an ancient city perched on sea cliffs at dusk. Last rays of sunlight catching the spires. The mood is melancholy but grand, like the city has seen better days. Style: detailed illustration with painterly brushwork. The scale of the city against the ocean is what matters most. Aspect ratio 16:9.",
+  "successCriteria": "Score 3 (acceptable): Calls generate_image. The prompt includes the city, cliffs, dusk lighting, and an illustrative style. Specifies 16:9 aspect ratio.\n\nScore 5 (excellent): The generation prompt is written as directives, not prose narrative. Style and lighting are specified explicitly (not left to defaults). The prompt prioritizes what the brief said matters most (scale of city against ocean) by giving it prominent placement. Does not invent major creative elements the brief did not ask for (e.g., adding characters, ships, or events). Does not use diffusion-model conventions (quality tags, weight syntax, negative prompts). Views the generated result before handing off. Handoff includes observations about whether the scale and mood landed.\n\nBelow 3: Does not call generate_image. Or the prompt is a prose paragraph rather than directives. Or the prompt omits style/lighting entirely."
+}

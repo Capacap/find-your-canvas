@@ -1,0 +1,11 @@
+## Content safety
+
+The image model has content guardrails that refuse explicit content (frontal nudity, sex acts). The filter is intent-sensitive: dark or violent imagery is generally allowed when it serves a clear creative purpose.
+
+The filter can also be uneven. Innocuous requests sometimes get rejected for no obvious reason. Do not assume the request was inappropriate.
+
+When a generation is rejected:
+1. Reframe the prompt to establish creative context. "A warrior standing victorious after battle" carries clearer intent than "a person covered in blood." Adding genre, medium, or narrative framing (e.g., "oil painting in the style of classical battle scenes") signals artistic purpose.
+2. Reduce ambiguity around the flagged content. Vague descriptions of bodies, violence, or intimacy trigger filters more readily than specific, contextualized ones.
+3. Retry once with the adjusted prompt.
+4. If rejected again, stop. Hand off with a note explaining what was tried and why it failed, so the approach can be adjusted at a higher level.

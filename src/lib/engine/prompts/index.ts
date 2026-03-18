@@ -1,30 +1,104 @@
 /**
- * Prompt template loader.
+ * Prompt assembly.
  *
- * Templates are plain text files with {{variable}} placeholders.
- * Vite's ?raw import inlines them at build time, so there's no
- * runtime file I/O and they work in the static SPA build.
+ * Section files in ./sections/ are atomic prompt components, each covering
+ * one concern. This module imports them at build time (Vite ?raw), assembles
+ * them into per-agent templates, and exports the same interface the agent
+ * definitions consume: template strings with {{variable}} placeholders,
+ * plus utilities for building dynamic sections (memory, images).
+ *
+ * To change a shared behavior (e.g., content filter guidance), edit the
+ * shared section file. To A/B test a section, swap it in the assembly below.
  */
 
 import type { ImageMeta } from '$lib/types/schema';
 
-import orchestratorTemplate from './orchestrator.txt?raw';
-import textToImageTemplate from './text-to-image.txt?raw';
-import imageToImageTemplate from './image-to-image.txt?raw';
+// ── Shared sections ──
+
+import contentFilter from './sections/content-filter.txt?raw';
+import referenceImages from './sections/reference-images.txt?raw';
+import specialistConfidence from './sections/specialist-confidence.txt?raw';
+
+// ── Orchestrator sections ──
+
+import orchestratorIdentity from './sections/orchestrator-identity.txt?raw';
+import orchestratorIntent from './sections/orchestrator-intent.txt?raw';
+import orchestratorGuidance from './sections/orchestrator-guidance.txt?raw';
+import orchestratorDispatching from './sections/orchestrator-dispatching.txt?raw';
+import orchestratorPostGeneration from './sections/orchestrator-post-generation.txt?raw';
+import orchestratorMemory from './sections/orchestrator-memory.txt?raw';
+import orchestratorVoice from './sections/orchestrator-voice.txt?raw';
+
+// ── Text-to-image sections ──
+
+import ttiIdentity from './sections/tti-identity.txt?raw';
+import ttiPrompts from './sections/tti-prompts.txt?raw';
+
+// ── Image-to-image sections ──
+
+import itiIdentity from './sections/iti-identity.txt?raw';
+import itiTransformation from './sections/iti-transformation.txt?raw';
+
+// ── Dynamic section templates ──
+
 import memoryIndexTemplate from './memory-index.txt?raw';
 import memoryEmptyTemplate from './memory-empty.txt?raw';
+
+// ── Assembly ──
+
+function assemble(...sections: string[]): string {
+  return sections.map((s) => s.trim()).join('\n\n');
+}
+
+const orchestratorTemplate = assemble(
+  orchestratorIdentity,
+  orchestratorIntent,
+  orchestratorGuidance,
+  orchestratorDispatching,
+  orchestratorPostGeneration,
+  orchestratorMemory,
+  contentFilter,
+  orchestratorVoice,
+  '{{memorySection}}',
+  '{{imageIndexSection}}'
+);
+
+const textToImageTemplate = assemble(
+  ttiIdentity,
+  specialistConfidence,
+  ttiPrompts,
+  referenceImages,
+  contentFilter,
+  '{{memorySection}}',
+  '{{imageIndexSection}}'
+);
+
+const imageToImageTemplate = assemble(
+  itiIdentity,
+  specialistConfidence,
+  itiTransformation,
+  referenceImages,
+  contentFilter,
+  '{{memorySection}}',
+  '{{imageIndexSection}}'
+);
+
+// ── Interpolation ──
 
 /** Replace {{key}} placeholders with values from the provided map. */
 function interpolate(template: string, vars: Record<string, string>): string {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? '');
 }
 
-/** Render the memory index table for injection into agent prompts. */
+// ── Dynamic section builders ──
+
+/** Render the memory index table for injection into agent prompts.
+ *  Wrapped in <project-memory> to separate dynamic context from static instructions. */
 function buildMemorySection(
   topics: { slug: string; title: string; summary: string }[],
   totalCount?: number
 ): string {
-  if (topics.length === 0) return memoryEmptyTemplate;
+  if (topics.length === 0) return `<project-memory>\n${memoryEmptyTemplate}\n</project-memory>`;
   const total = totalCount ?? topics.length;
   const truncated = total > topics.length;
   const rows = topics.map((t) =>
@@ -37,14 +111,14 @@ function buildMemorySection(
   if (truncated) {
     section += `\n\n*Showing ${topics.length} most recently used of ${total} total topics. Use \`search_memories\` to find others.*`;
   }
-  return section;
+  return `<project-memory>\n${section}\n</project-memory>`;
 }
 
 /** Render the image index for injection into agent prompts.
- *  Includes its own heading and guidance so the section is self-contained. */
+ *  Wrapped in <project-images> to separate dynamic context from static instructions. */
 function buildImageIndex(images: ImageMeta[], totalCount?: number): string {
   if (images.length === 0) {
-    return '## Project Images\n\nNo images in this project yet.';
+    return '<project-images>\n## Project Images\n\nNo images in this project yet.\n</project-images>';
   }
 
   const total = totalCount ?? images.length;
@@ -74,8 +148,10 @@ function buildImageIndex(images: ImageMeta[], totalCount?: number): string {
     lines.push(`*Showing ${images.length} most recently used of ${total} total images. Use \`search_images\` to find others.*`);
   }
 
-  return lines.join('\n');
+  return `<project-images>\n${lines.join('\n')}\n</project-images>`;
 }
+
+// ── Exports ──
 
 export {
   orchestratorTemplate,

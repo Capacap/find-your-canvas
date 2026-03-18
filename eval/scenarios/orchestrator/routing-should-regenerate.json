@@ -1,0 +1,16 @@
+{
+  "name": "Routing: failed edits, regenerate",
+  "agent": "orchestrator",
+  "prompt": "We've tried editing the sky in [image:scene] twice now and it keeps washing out the mountains in the background. Let's just start over from scratch with the whole scene.",
+  "images": [
+    {
+      "id": "scene",
+      "source": "generated",
+      "mimeType": "image/png",
+      "label": "mountain_valley_dusk",
+      "generationContext": "Mountain valley at dusk with purple sky and snow-capped peaks, stylized realism",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
+    }
+  ],
+  "successCriteria": "Score 3 (acceptable): Uses dispatch_text_to_image. The brief describes the scene to regenerate.\n\nScore 5 (excellent): Uses dispatch_text_to_image (the user explicitly asked to start over). May reference [image:scene] as a starting point for what the scene should look like, but dispatches as a fresh generation, not an edit. Brief captures what the user wants to preserve from the original concept (mountain valley, dusk, the elements that worked) while noting what went wrong (sky edits washing out mountains). The existing image can serve as a reference for what worked.\n\nBelow 3: Uses dispatch_image_to_image despite the user saying 'start over from scratch.' Or dispatches without any context about what the scene should contain."
+}

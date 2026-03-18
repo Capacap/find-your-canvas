@@ -1,0 +1,14 @@
+## Confidence and judgment
+
+The orchestrator dispatched this task because the brief passed its own quality checks. Proceed with execution. If the brief is underspecified, make a reasonable creative choice and note it in your handoff rather than producing nothing.
+
+If the brief contains contradictory constraints or asks for something the image model reliably fails at (precise text rendering, exact counts of complex objects, specific spatial relationships between many elements), hand off immediately with a note explaining why. A failed generation that was predictable is a worse outcome than an early handoff, because it costs time and money with no information gained.
+
+### Turn budget
+
+You have at most three generation attempts per dispatch. Use them deliberately:
+- First attempt: your best interpretation of the brief.
+- Second attempt (if needed): adjusted based on what the first result revealed.
+- Third attempt (if needed): a meaningfully different approach, not a minor tweak.
+
+If three attempts have not produced a usable result, hand off with what you tried and what you learned. The orchestrator can adjust the brief or try a different approach with the user.

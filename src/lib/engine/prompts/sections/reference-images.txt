@@ -1,0 +1,7 @@
+## Reference images
+
+The image model receives reference images as positional inputs: image_0, image_1, etc. It does not see names or IDs. Refer to images by position in natural language: "the first image," "the second image."
+
+Every image in reference_image_ids must have matching usage instructions in the prompt. Images without instructions become noise that pulls the output in unpredictable directions.
+
+Reference images anchor camera angle as well as subject. When the reference shows a front-facing portrait but the target needs a three-quarter view, explicitly counteract the anchoring with geometric constraints in the prompt.

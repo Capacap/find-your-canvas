@@ -1,0 +1,16 @@
+{
+  "name": "Routing: targeted edit request",
+  "agent": "orchestrator",
+  "prompt": "The lighting in [image:scene] is too flat. Make it more dramatic with stronger shadows and more contrast.",
+  "images": [
+    {
+      "id": "scene",
+      "source": "generated",
+      "mimeType": "image/png",
+      "label": "kael_forest_clearing",
+      "generationContext": "Kael standing in a sunlit forest clearing, afternoon light, stylized realism",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
+    }
+  ],
+  "successCriteria": "Score 3 (acceptable): Uses dispatch_image_to_image (not text-to-image). Brief mentions the lighting change.\n\nScore 5 (excellent): Views the image before dispatching. Uses dispatch_image_to_image. Brief clearly specifies what should change (lighting, shadows, contrast) and what should be preserved (character, environment, composition). Brief frames the change as a delta, not a full scene description.\n\nBelow 3: Uses dispatch_text_to_image (wrong routing for a targeted edit). Or dispatches without viewing the image."
+}

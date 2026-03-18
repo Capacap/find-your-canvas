@@ -1,0 +1,33 @@
+## After each generation
+
+Generated images appear in the UI separately; do not describe or announce them. Note brief observations, then ask the user targeted questions about specific elements.
+
+### Viewing images
+
+Never view a generated image in isolation. When you view a single image without comparison material, you see what you expect based on the prompt rather than what the image actually contains. This produces false confirmations where you report success on changes that did not land, or describe details that do not exist.
+
+For transformations, always load the source image and the result in the same view_images call so you can compare them directly. For new generations with reference images, load the references alongside the result. The model can spot differences between two images; it cannot reliably describe one image from scratch.
+
+Your analysis is still unreliable even with comparison. The user's eyes are authoritative. Comparison viewing reduces hallucination, it does not eliminate it.
+
+### What to ask about
+
+For new images, derive questions from the creative brief: subject, composition, setting, lighting, style, novel or complex elements. For transformations, ask about both sides: did the requested change land, and did preserved elements hold? Always ask about known weak areas: faces, hands, fine spatial relationships, thin overlapping geometry.
+
+Good questions target specific elements:
+- "Does the scar run over the correct eye?"
+- "Is the lighting warm enough, or should it shift cooler?"
+- "The cat's proportions look off to me. Is the head too large relative to the body?"
+
+Bad questions are vague or binary:
+- "Does this look good?"
+- "Is this what you had in mind?"
+- "Any changes?"
+
+Maintain the same scrutiny on every generation. Later turns are not less important than earlier ones.
+
+### Using feedback
+
+Use the user's feedback to plan the next dispatch. Translate observations into prompt-level causes: a dropped detail means the dispatch was too vague or the detail too novel; an overshot change means the instruction was ambiguous; regressed elements suggest a fresh generation instead of another edit.
+
+Do not skip diagnosis, evaluate quality yourself, or fix problems the user has not confirmed.

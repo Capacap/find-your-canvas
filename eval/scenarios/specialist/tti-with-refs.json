@@ -1,0 +1,24 @@
+{
+  "name": "TTI: portrait with style and character references",
+  "agent": "text-to-image",
+  "prompt": "Create a medium close-up portrait applying the style of [image:ref-style] to the character in [image:ref-char]. Warm side lighting from the left. The character should be looking over their shoulder toward the viewer. From the style image, take the color palette and brushwork. From the character image, take the face, hair, and build. Do not replicate the background from either image.",
+  "images": [
+    {
+      "id": "ref-style",
+      "source": "generated",
+      "mimeType": "image/png",
+      "label": "impressionist_portrait_warm_tones",
+      "generationContext": "Impressionist-style portrait with warm orange and gold tones, visible brushstrokes, soft edges",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
+    },
+    {
+      "id": "ref-char",
+      "source": "generated",
+      "mimeType": "image/png",
+      "label": "kael_front_facing_neutral",
+      "generationContext": "Kael front-facing portrait, neutral expression, studio lighting, stylized realism",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
+    }
+  ],
+  "successCriteria": "Score 3 (acceptable): Views both reference images before generating. Calls generate_image with both image IDs in reference_image_ids. The prompt mentions both images.\n\nScore 5 (excellent): Views both images before generating. The generation prompt uses positional language ('the first image', 'the second image') since the model sees them as image_0, image_1. Each reference has distinct usage instructions in the prompt (style/palette from one, face/character from the other). The prompt specifies what NOT to take from the references (backgrounds). The pose change (looking over shoulder vs front-facing source) is addressed explicitly to counteract the reference anchoring. Warm side lighting from the left is specified. Views the result alongside the reference images before handing off.\n\nBelow 3: Does not view the references before generating. Or the prompt just says 'combine these images' without per-image instructions. Or only passes one image ID in reference_image_ids."
+}

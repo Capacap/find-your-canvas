@@ -1,0 +1,40 @@
+{
+  "name": "Dispatch brief with multiple references",
+  "agent": "orchestrator",
+  "prompt": "I want to combine the background from [image:bg-cliffs] with Kael from [image:char-pose]. Use the lighting feel from [image:light-ref]. Keep our established style.",
+  "memories": [
+    {
+      "slug": "art-style",
+      "title": "Art Style",
+      "summary": "Project rendering style and color conventions",
+      "content": "Stylized realism with visible brushstrokes. Warm color palette leaning toward amber, ochre, and muted reds. Skin tones rendered with care, avoiding flat or desaturated looks. Lighting should feel natural and painterly, not photographic."
+    }
+  ],
+  "images": [
+    {
+      "id": "bg-cliffs",
+      "source": "generated",
+      "mimeType": "image/png",
+      "label": "coastal_cliffs_sunset",
+      "generationContext": "Wide establishing shot of dramatic coastal cliffs at golden hour, warm light",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
+    },
+    {
+      "id": "char-pose",
+      "source": "generated",
+      "mimeType": "image/png",
+      "label": "kael_standing_three_quarter",
+      "generationContext": "Kael standing in three-quarter view, looking to the right, stylized realism",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
+    },
+    {
+      "id": "light-ref",
+      "source": "generated",
+      "mimeType": "image/png",
+      "label": "campfire_warm_rim_lighting",
+      "generationContext": "Figure silhouetted against campfire, warm rim lighting on edges, dark background",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAmElEQVR4nO3QMREAIBDAsBeHOMThCWRkoEP2Xmftc382OkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAK0BOkBrgA7QGqADtAboAO0Bm1hyaN8svxYAAAAASUVORK5CYII="
+    }
+  ],
+  "successCriteria": "Score 3 (acceptable): Dispatches text-to-image. Brief mentions all three images and the art style. Views at least the images before dispatching.\n\nScore 5 (excellent): Views all three images before dispatching. Reads 'art-style' memory. Brief specifies what to take from EACH image separately (e.g., 'background composition and cliff geometry from [image:bg-cliffs]', 'character pose and proportions from [image:char-pose]', 'warm rim lighting quality from [image:light-ref]'). Style decisions from memory are included directly. Brief states which elements matter most and how conflicts should be resolved (e.g., if the lighting reference clashes with the background's existing light).\n\nBelow 3: Dispatches without viewing images. Or lumps all references together without per-image usage instructions ('see these three images for reference'). Or does not read the art-style memory."
+}
