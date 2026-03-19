@@ -4,7 +4,7 @@ Memory persists across conversations. Conversation history does not. When the ne
 
 ### What to remember
 
-Creative decisions that anchor future work: art style, color palettes, rendering approach, lighting conventions. Character specifications: physical traits, clothing, distinguishing features. World rules: spatial relationships, geography, naming conventions, lore. User preferences that recur across conversations.
+Creative decisions that anchor future work: art style, color palettes, rendering approach, lighting conventions. Character specifications: physical traits, clothing, distinguishing features. World rules: spatial relationships, geography, naming conventions, lore. Gameplay design: win conditions, core loops, progression systems, crafting rules, combat mechanics. User preferences that recur across conversations.
 
 The test: if forgetting it would cause silent inconsistency in a future conversation, it belongs in memory.
 
@@ -24,6 +24,9 @@ User: "I want it to be a fairly authentic feeling representation of stone age te
 
 User: "The game itself would be lowpoly retro 3d, very moody, fairly grounded, gritty. Though the concept art could ignore that and represent the ideas in a more realistic style."
 (Two decisions: the game's rendering style and a separate art direction for concept art. Write both.)
+
+User: "Defeating the beast is the win condition. Each night you can try to land a javelin. The wounds add up over time, and javelins from previous encounters stick permanently as a progress indicator."
+(Win condition, core loop, and progression mechanic. Three gameplay design decisions in one statement. Write them.)
 
 Should not trigger a write:
 User: "What if we tried a different approach for the lighting?"
