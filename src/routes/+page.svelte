@@ -170,6 +170,13 @@
 
   // ── Turn execution ──
 
+  const AGENT_FIRST_MESSAGE = '<system-notice>The user is starting a new session and wants you to take initiative and get the session rolling. Read project memory if available, review existing images, then recommend an initial topic to discuss. For a new project with no context yet, introduce yourself briefly and ask what the user wants to explore.</system-notice>';
+
+  function isSystemNotice(text: string): boolean {
+    const t = text.trim();
+    return t.startsWith('<system-notice>') && t.endsWith('</system-notice>');
+  }
+
   async function handleSend() {
     if ((!userInput.trim() && pendingFiles.length === 0) || turn.isRunning) return;
     if (!app.currentProject) return;
@@ -182,7 +189,7 @@
     if (!app.currentConversation) {
       const title = text.length > 50 ? text.slice(0, 50) + '...' : text;
       await handleCreateConversation(title);
-    } else if (app.messages.length === 0 && app.currentConversation.title === 'New conversation') {
+    } else if (app.currentConversation.title === 'New conversation' && !app.messages.some((m) => m.role === 'user' && !isSystemNotice(m.text))) {
       const title = text.length > 50 ? text.slice(0, 50) + '...' : text;
       await renameConversation(app.currentConversation.id, title);
     }
@@ -191,6 +198,16 @@
     const reattach = rollbackImageIds;
     rollbackImageIds = [];
     await sendMessage({ text, files: filesToSend, reattachImageIds: reattach.length > 0 ? reattach : undefined, onImageGenerated: resolveImageId });
+  }
+
+  async function handleAgentFirst() {
+    if (turn.isRunning || !app.currentProject) return;
+
+    if (!app.currentConversation) {
+      await handleCreateConversation();
+    }
+
+    await sendMessage({ text: AGENT_FIRST_MESSAGE, onImageGenerated: resolveImageId });
   }
 
   async function handleRetry() {
@@ -204,7 +221,7 @@
     isRollingBack = true;
     try {
       const result = await rollbackTurn();
-      if (result) {
+      if (result && !isSystemNotice(result.userText)) {
         userInput = result.userText;
         rollbackImageIds = result.userImageIds;
       }
@@ -221,6 +238,27 @@
   }
 
   // ── Rendering ──
+
+  const SUGGESTED_REPLIES_EXTRACT_RE = /<suggested-replies>\s*([\s\S]*?)\s*<\/suggested-replies>/;
+  const SUGGESTED_REPLIES_STRIP_RE = /<suggested-replies>\s*[\s\S]*?\s*<\/suggested-replies>/g;
+
+  function extractSuggestedReplies(text: string): string[] {
+    const match = text.match(SUGGESTED_REPLIES_EXTRACT_RE);
+    if (!match) return [];
+    return match[1]
+      .split('\n')
+      .map((line) => line.replace(/^-\s*/, '').replace(/^[""]|[""]$/g, '').trim())
+      .filter(Boolean);
+  }
+
+  function stripSuggestedReplies(text: string): string {
+    return text.replace(SUGGESTED_REPLIES_STRIP_RE, '').trimEnd();
+  }
+
+  function handleSuggestedReply(text: string) {
+    userInput = text;
+    handleSend();
+  }
 
   function renderMessageText(text: string): string {
     const withImages = text.replace(
@@ -706,27 +744,50 @@
       ondrop={handleDrop}
     >
         <div class="messages">
-          {#each app.messages as msg}
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div class="message {msg.role}" class:error-turn={msg.errorTurn} onclick={handleMessageClick}>
-              <div class="message-role">
-                {msg.role === 'user' ? 'You' : 'Assistant'}
-                {#if msg.errorTurn}<span class="error-turn-badge">interrupted</span>{/if}
-              </div>
-              <div class="message-text">{@html renderMessageText(msg.text)}</div>
-              {#if msg.imageIds.length > 0}
-                <div class="message-images">
-                  {#each msg.imageIds as imgId}
-                    {#if resolvedImageUrls[imgId]}
-                      <button class="image-button" onclick={() => openLightbox(imgId)}>
-                        <img src={resolvedImageUrls[imgId]} alt={imgId} class="gallery-image" />
-                      </button>
-                    {/if}
-                  {/each}
-                </div>
-              {/if}
+          {#if app.messages.length === 0 && !turn.isRunning && app.settings?.geminiApiKey}
+            <div class="agent-first-prompt">
+              <button class="agent-first-btn" onclick={handleAgentFirst}>
+                Let the assistant start
+              </button>
             </div>
+          {/if}
+          {#each app.messages as msg, i}
+            {#if msg.role === 'user' && isSystemNotice(msg.text)}
+              <div class="system-notice">Session started by you</div>
+            {:else}
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div class="message {msg.role}" class:error-turn={msg.errorTurn} onclick={handleMessageClick}>
+                <div class="message-role">
+                  {msg.role === 'user' ? 'You' : 'Assistant'}
+                  {#if msg.errorTurn}<span class="error-turn-badge">interrupted</span>{/if}
+                </div>
+                <div class="message-text">{@html renderMessageText(msg.role === 'assistant' ? stripSuggestedReplies(msg.text) : msg.text)}</div>
+                {#if msg.imageIds.length > 0}
+                  <div class="message-images">
+                    {#each msg.imageIds as imgId}
+                      {#if resolvedImageUrls[imgId]}
+                        <button class="image-button" onclick={() => openLightbox(imgId)}>
+                          <img src={resolvedImageUrls[imgId]} alt={imgId} class="gallery-image" />
+                        </button>
+                      {/if}
+                    {/each}
+                  </div>
+                {/if}
+                {#if msg.role === 'assistant' && i === app.messages.length - 1 && !turn.isRunning}
+                  {@const suggestions = extractSuggestedReplies(msg.text)}
+                  {#if suggestions.length > 0}
+                    <div class="suggested-replies">
+                      {#each suggestions as suggestion}
+                        <button class="suggested-reply" onclick={() => handleSuggestedReply(suggestion)}>
+                          {suggestion}
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                {/if}
+              </div>
+            {/if}
           {/each}
 
           {#if !turn.isRunning && !turn.errorText && app.orchestratorSession?.preTurnHistoryLength !== undefined && app.messages.length > 0 && app.messages[app.messages.length - 1].role === 'assistant'}
@@ -1441,6 +1502,59 @@
   .rollback-btn:hover {
     color: #ccc;
     border-color: #888;
+  }
+
+  .agent-first-prompt {
+    display: flex;
+    justify-content: center;
+    padding: 2rem 0;
+  }
+
+  .agent-first-btn {
+    background: transparent;
+    color: #888;
+    border: 1px dashed #444;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .agent-first-btn:hover {
+    color: #f5c542;
+    border-color: #f5c542;
+  }
+
+  .system-notice {
+    text-align: center;
+    color: #666;
+    font-size: 0.8rem;
+    font-style: italic;
+    padding: 0.25rem 0;
+  }
+
+  .suggested-replies {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+  }
+
+  .suggested-reply {
+    background: transparent;
+    color: #aaa;
+    border: 1px solid #333;
+    padding: 0.3rem 0.7rem;
+    border-radius: 16px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .suggested-reply:hover {
+    color: #f5c542;
+    border-color: #f5c542;
   }
 
   .chat.dragging {

@@ -1,0 +1,18 @@
+## Suggested replies
+
+After each response, append 2-3 short suggested replies the user might send next. Wrap them in a `<suggested-replies>` block at the very end of your message. The format:
+
+```
+<suggested-replies>
+- "First option"
+- "Second option"
+- "Third option"
+</suggested-replies>
+```
+
+Each line starts with `- ` (dash space), text in straight double quotes, no blank lines between items. Each suggestion should be a complete message the user could send as-is, written in the user's voice. Good suggestions offer distinct directions: one that moves forward, one that refines, one that pivots. Keep them action-oriented and under 15 words. Avoid generic options like "Looks good" or "Let's continue" that collapse feedback into approval, and avoid suggestions that restate what you just proposed.
+
+Include the block by default. Skip it only when:
+- You just asked the user a direct question and are waiting for their answer.
+- The user is mid-description and clearly has more to say.
+- The user is giving detailed feedback or negotiating a specific creative direction.

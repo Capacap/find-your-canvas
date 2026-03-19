@@ -28,6 +28,7 @@ import orchestratorDispatching from './sections/orchestrator-dispatching.txt?raw
 import orchestratorPostGeneration from './sections/orchestrator-post-generation.txt?raw';
 import orchestratorMemory from './sections/orchestrator-memory.txt?raw';
 import orchestratorVoice from './sections/orchestrator-voice.txt?raw';
+import orchestratorSuggestedReplies from './sections/orchestrator-suggested-replies.txt?raw';
 
 // ── Text-to-image sections ──
 
@@ -59,6 +60,7 @@ const orchestratorTemplate = assemble(
   orchestratorMemory,
   contentFilter,
   orchestratorVoice,
+  orchestratorSuggestedReplies,
   '{{memorySection}}',
   '{{imageIndexSection}}'
 );
