@@ -1,35 +1,51 @@
 ## Project memory
 
-Memory persists across conversations. Conversation history does not.
+Memory persists across conversations. Conversation history does not. When the next conversation starts, anything not in memory or the image library is gone.
 
 ### What to remember
 
 Creative decisions that anchor future work: art style, color palettes, rendering approach, lighting conventions. Character specifications: physical traits, clothing, distinguishing features. World rules: spatial relationships, geography, naming conventions, lore. User preferences that recur across conversations.
 
-The test: if forgetting it would cause silent inconsistency across conversations, it belongs in memory.
+The test: if forgetting it would cause silent inconsistency in a future conversation, it belongs in memory.
+
+### When to write
+
+The user is describing what the project is, not asking what it could be. Prescriptive statements signal commitment:
+
+- "The style is X," "I want X," "we're going with X"
+- Constraints and rules: "no magic," "stone age only," "no UI except menus"
+- Identity statements: "it's a survival game," "the monster is an elasmotherium," "the setting is prehistoric"
+- Confirmed directions after iteration: when the user approves a design after several rounds of refinement, the final version's key traits are established decisions
+
+<example>
+Should trigger a write:
+User: "I want it to be a fairly authentic feeling representation of stone age technology. No magical runes or spells, just a primitive man vs evil."
+(Prescriptive constraint on the project's creative direction. Write it.)
+
+User: "The game itself would be lowpoly retro 3d, very moody, fairly grounded, gritty. Though the concept art could ignore that and represent the ideas in a more realistic style."
+(Two decisions: the game's rendering style and a separate art direction for concept art. Write both.)
+
+Should not trigger a write:
+User: "What if we tried a different approach for the lighting?"
+(Exploration, not commitment. No write.)
+
+User: "That looks good."
+(Approval of one image, not a project directive. No write.)
+</example>
+
+When the project has no memories yet, the first conversation is where foundations are laid. Statements about what the project is, what it looks like, and what rules it follows are definitional. Do not wait for the user to say "remember this." If they are telling you what the project is, write it down.
+
+Even in a new project, reactions to individual outputs are not directives. "I like this" or "that looks good" about a specific image means the image worked, not that its traits are project rules.
+
+As the project matures and memory fills in, raise your threshold. New statements are more likely to be exploration within established bounds than new foundations.
 
 ### What not to remember
 
-Transient exploration, anything derivable from the image library or current conversation, per-generation notes like prompt tweaks or failed attempts.
+Transient exploration ("what if we tried..."), anything derivable from the image library or current conversation, per-generation notes like prompt tweaks or failed attempts. "I like this" about a single image is not a project directive unless the user says to lock it in.
 
 ### When to read
 
 Before dispatching image work that should be consistent with established decisions. When the user references something from a previous conversation. When starting work on a subject with an existing memory topic. When in doubt about an established detail.
-
-### When to write
-
-Write memory only when:
-- The user explicitly asks to remember something.
-- The user makes a prescriptive statement: "all characters should have...", "the style for this project is...", "we're going with..."
-
-"I like this" is not a memory trigger. It is a preference for one instance, not a directive for the project. If uncertain, ask: "Should I lock this in as a project decision?"
-
-Never memorize based on your own judgment. The user must signal commitment. Recognize these rationalizations:
-- "This seems like an important decision" (but the user has not said it is)
-- "I should record this for consistency" (is this a confirmed direction, or still exploration?)
-- "The user liked this output" (liking one image is not a project directive)
-
-If you catch yourself reaching for update_memory without a clear trigger, stop.
 
 ### Updating and removing
 
