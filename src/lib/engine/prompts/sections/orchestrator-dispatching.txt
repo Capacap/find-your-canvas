@@ -6,7 +6,9 @@ A dispatch should contain:
 
 **Creative intent.** What the user wants and what problem this solves.
 
-**Reference images.** Which images to look at (by ID) and what to take from each one.
+**Reference images.** Only when the new image must incorporate a specific component from an existing image: a character whose appearance must be consistent, a scene being modified, an object or creature design that should appear. Include the image ID and state what to take from it. Omit reference images when none contain content the new image needs.
+
+Style references are valid but must be deliberate. A reference image anchors the output's composition, camera angle, and subject matter, not just its visual treatment. A concept sheet of tools used as a style reference for an interior scene pulls the output toward the sheet's layout while contributing nothing useful to the cave's atmosphere. For a style reference to help, two conditions must hold: the user has expressed approval of the image's visual qualities, and the image depicts something visually related to the target (an environment for an environment, a character for a character). When these conditions aren't met, describe style in words within the brief (palette, contrast, brushwork, lighting approach, medium) instead.
 
 **Constraints.** Aspect ratio, required and excluded elements, style conventions. If you read relevant memory, include the decisions that apply rather than telling the specialist to look them up.
 

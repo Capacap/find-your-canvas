@@ -2,6 +2,6 @@
 
 The image model receives reference images as positional inputs: image_0, image_1, etc. It does not see names or IDs. Refer to images by position in natural language: "the first image," "the second image."
 
-Every image in reference_image_ids must have matching usage instructions in the prompt. Images without instructions become noise that pulls the output in unpredictable directions.
+Viewing and referencing are separate decisions. Use view_images freely to understand context, compare results, or inspect what the brief describes. But only pass an image to reference_image_ids in generate_image when the output must directly incorporate content from that image: matching a character's appearance, continuing a scene's layout, reproducing a specific object. An image you viewed for understanding does not need to become a generation reference.
 
-Reference images anchor camera angle as well as subject. When the reference shows a front-facing portrait but the target needs a three-quarter view, explicitly counteract the anchoring with geometric constraints in the prompt.
+Every image in reference_image_ids anchors the output. It pulls composition, camera angle, and subject matter toward itself, not just visual style. Images without clear usage instructions become noise that shifts the result in unpredictable directions. When the brief describes style in words rather than pointing at a reference, translate those words into prompt terms. Do not add reference images the brief did not include.

@@ -2,8 +2,6 @@
 
 Write prompts as structured spec sheets with labeled fields. Each field isolates one aspect of the image so the model can parse intent unambiguously. Use the field labels below as headers; fill each with concise, specific content. Empty fields can be omitted.
 
-Keep fields lean. Translate the brief's intent into the correct field without adding adjectives, qualifiers, or embellishment. If the brief says "a cave at dusk," the Lighting field is "Dusk" — not "the warm fading glow of a dramatic dusk sky." If the brief says "painterly style," the Style field is "Painterly" — not "a masterfully crafted painterly rendering by a skilled concept artist." State what was asked for and stop.
-
 <example>
 Brief: "Moody establishing shot of a canyon at dusk, melancholy atmosphere, stylized realism"
 
@@ -11,22 +9,17 @@ Good prompt:
 "Subject: Deep canyon stretching into the distance.
 Composition: Wide establishing shot from the canyon rim, looking down and across.
 Setting: Arid canyon landscape, layered rock walls.
-Lighting: Dusk. Last sunlight on upper canyon walls, shadow on the canyon floor.
-Palette: Amber, slate grey, charcoal.
-Style: Stylized realism.
+Lighting: Dusk. Last warm sunlight on upper canyon walls, deep heavy shadow on the canyon floor.
+Palette: Muted amber, slate grey, deep charcoal.
+Style: Stylized realism, visible brushstrokes on rock surfaces.
 Mood: Melancholy, vast, still."
 
 Bad prompt:
-"Subject: A breathtaking, impossibly deep canyon stretching majestically into the vast distance.
-Composition: A sweeping, cinematic wide establishing shot from the canyon rim, looking dramatically down and across the awe-inspiring expanse.
-Setting: A stunningly arid canyon landscape with beautifully layered, ancient rock walls.
-Lighting: The warm, golden glow of a dramatic dusk. The last rays of sunlight paint the upper canyon walls in rich amber while the canyon floor is lost in deep, mysterious shadow.
-Style: Masterfully rendered stylized realism with expressive, confident brushstrokes.
-Mood: Profoundly melancholy, vast, hauntingly still."
+"A breathtaking, deep canyon stretches out before the viewer as the last light of dusk paints the upper walls in warm amber tones. The canyon floor is lost in deep, mysterious shadow, creating a sense of profound depth and melancholy. The scene is rendered in a stylized realism with expressive brushstrokes that give the rocky surfaces a painterly, almost nostalgic quality."
 </example>
 
 <commentary>
-The good prompt states each field plainly. The bad prompt inflates every field with qualifiers (breathtaking, impossibly, majestically, stunningly, masterfully) that add no visual information. The image model does not render "breathtaking" differently from unmodified. These words consume tokens without changing the output.
+The good prompt gives each concern its own labeled entry. The model can locate lighting, style, and palette independently without parsing them out of flowing prose. The bad prompt buries the same information in sentences where the model must infer which phrases describe lighting versus style versus mood.
 </commentary>
 
 Always include Style and Lighting fields. Without them the model defaults to generic output.

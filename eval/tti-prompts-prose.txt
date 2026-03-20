@@ -1,0 +1,41 @@
+## Writing generation prompts
+
+Write prompts as flowing descriptive paragraphs. Describe the scene the way a concept artist would describe a painting to a colleague: complete sentences, evocative language, natural reading order. The image model processes natural language well; let the description build a coherent mental image across sentences rather than fragmenting it into shorthand.
+
+<example>
+Brief: "Moody establishing shot of a canyon at dusk, melancholy atmosphere, stylized realism"
+
+Good prompt:
+"A deep canyon stretches into the distance under fading dusk light. The last sunlight catches the upper walls in muted amber while the canyon floor lies buried in heavy shadow. The rendering is stylized realism with visible brushstrokes across the rock faces, and the palette stays restrained: amber, slate, and deep grey. The mood is melancholy and vast, the kind of stillness that comes after everything has already happened."
+
+Bad prompt:
+"Deep canyon at dusk. Camera positioned at the rim looking down, wide angle. Last sunlight on the upper canyon walls, deep shadow filling the floor. Muted warm tones, amber and slate. Stylized realism with visible brushstrokes. Melancholy, vast, still."
+</example>
+
+<commentary>
+The good prompt builds a coherent scene across sentences. Each sentence adds a layer: geography, lighting, style, palette, mood. The bad prompt is a telegraphic list that fragments the same information into disconnected signals. The descriptive form lets the model reason about how elements relate to each other.
+</commentary>
+
+Always specify style and lighting. Without them the model defaults to generic output.
+
+### Staying faithful to the brief
+
+Your prompt should contain two kinds of content: the brief's creative elements (what was asked for) and your technical execution (how to achieve it). Camera angle, lighting setup, framing, style rendering are your technical contributions. New subjects, objects, narrative details, or scene elements that the brief did not mention are invention.
+
+Before writing, separate these in your head. If the brief says "the city has seen better days," you translate that into visual execution: weathered stone, faded paint, worn edges. You do not add crumbling bridges, abandoned ships, faded banners, or other specific objects you imagined. Those are new creative elements, not technical execution of an existing one.
+
+### Prompt structure
+
+Build the description in this order, weaving elements together naturally:
+1. Subject and setting establish what the viewer sees
+2. Composition and framing establish the camera's relationship to the scene
+3. Lighting and atmosphere establish mood
+4. Style and medium establish how it is rendered
+
+Techniques:
+- Positive framing over negation. "An empty, deserted street" over "no cars."
+- Relational cues, not absolute measurements.
+- Hex colors for precision when exact colors matter.
+- For photorealism, camera and lens specs force photographic rendering: "shot on a Canon EOS R5 with an 85mm f/1.4 lens, shallow depth of field."
+
+Match aspect ratio to the subject's proportions, not to convention.

@@ -1,0 +1,64 @@
+## Writing generation prompts
+
+Write prompts as structured spec sheets with labeled fields. Each field isolates one aspect of the image so the model can parse intent unambiguously. Use the field labels below as headers; fill each with concise, specific content. Empty fields can be omitted.
+
+Keep fields concise, but add concrete rendering targets that describe specific visual properties. Where the brief describes a surface, specify its texture: wood grain, cracked dried mud, matted fur, pitted limestone. Where it describes depth, specify the mechanism: atmospheric haze, overlapping silhouettes, size falloff. Where it describes light, specify how it interacts with materials: subsurface scattering on skin, specular highlights on wet stone, rim lighting separating the figure from the background.
+
+These are not quality adjectives. They are visual instructions the image model can render directly.
+
+<example>
+Brief: "Moody establishing shot of a canyon at dusk, melancholy atmosphere, stylized realism"
+
+Good prompt (technically specific):
+"Subject: Deep canyon stretching into the distance.
+Composition: Wide establishing shot from the canyon rim, looking down and across. Atmospheric haze increases with distance, separating foreground, midground, and background into distinct depth layers.
+Setting: Arid canyon landscape. Layered sedimentary rock walls with visible horizontal strata, rough eroded surfaces, patches of dry lichen.
+Lighting: Dusk. Low-angle warm sunlight raking across the upper canyon walls, casting long shadows that reveal surface relief. Canyon floor in cool ambient shadow.
+Palette: Muted amber, slate grey, deep charcoal.
+Style: Stylized realism, visible brushstrokes on rock surfaces, looser strokes in the atmospheric distance.
+Mood: Melancholy, vast, still."
+
+Bad prompt (generic quality words):
+"Subject: A breathtaking deep canyon stretching majestically into the distance.
+Composition: A stunning wide establishing shot from the canyon rim.
+Setting: A beautifully detailed arid canyon landscape with exquisitely layered rock walls.
+Lighting: Gorgeous dusk lighting with rich, warm, golden sunlight.
+Style: Masterfully rendered stylized realism by a highly skilled artist.
+Mood: Profoundly melancholy, overwhelmingly vast."
+</example>
+
+<commentary>
+The good prompt adds rendering targets: "horizontal strata," "rough eroded surfaces," "patches of dry lichen" tell the model what textures to produce on the rock. "Low-angle warm sunlight raking across the upper canyon walls, casting long shadows that reveal surface relief" describes a specific light behavior. "Atmospheric haze increases with distance" describes a specific depth mechanism. The bad prompt replaces these with adjectives (breathtaking, stunning, exquisitely, gorgeous, masterfully) that carry no visual information.
+</commentary>
+
+Always include Style and Lighting fields. Without them the model defaults to generic output.
+
+### Field reference
+
+Use these fields as needed. Not every prompt requires all of them.
+
+- **Subject:** What is in the image. The primary element.
+- **Composition:** Camera angle, framing, shot type, depth of field. Specify depth cues: overlap, scale falloff, atmospheric perspective.
+- **Setting:** Environment, location, context around the subject. Name specific surface textures and materials.
+- **Lighting:** Light sources, direction, quality, time of day. Describe how light behaves on specific surfaces: raking light on relief, rim light on edges, bounce light in shadow.
+- **Palette:** Dominant colors, color temperature, saturation level.
+- **Style:** Rendering approach, medium, artistic technique. Specify brush behavior: tight detail in focal areas, loose strokes in periphery.
+- **Mood:** Emotional tone, atmosphere.
+- **Details:** Specific elements that must be present. Describe material properties: wet, dry, rough, smooth, translucent, reflective.
+- **Constraints:** Requirements that override defaults. ALL CAPS for critical constraints, sparingly.
+
+### Staying faithful to the brief
+
+Your prompt should contain two kinds of content: the brief's creative elements (what was asked for) and your technical execution (how to achieve it). Camera angle, lighting setup, framing, style rendering are your technical contributions. New subjects, objects, narrative details, or scene elements that the brief did not mention are invention.
+
+Before writing, separate these in your head. If the brief says "the city has seen better days," you translate that into visual execution: weathered stone, faded paint, worn edges. You do not add crumbling bridges, abandoned ships, faded banners, or other specific objects you imagined. Those are new creative elements, not technical execution of an existing one.
+
+Technical specificity means describing how things look, not adding things that aren't there.
+
+Techniques:
+- Positive framing over negation. "An empty, deserted street" over "no cars."
+- Relational cues, not absolute measurements.
+- Hex colors for precision when exact colors matter.
+- For photorealism, camera and lens specs in the Composition field.
+
+Match aspect ratio to the subject's proportions, not to convention.

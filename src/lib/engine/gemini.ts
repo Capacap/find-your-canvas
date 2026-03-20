@@ -8,11 +8,13 @@
  */
 import {
   GoogleGenAI,
+  ThinkingLevel,
   type Chat,
   type Content,
   type FunctionCall,
   type GenerateContentConfig,
-  type Part
+  type Part,
+  type ThinkingConfig
 } from '@google/genai';
 
 // ── Client singleton ──
@@ -136,6 +138,7 @@ export async function generateImage(
     inputImages?: Array<{ data: string; mimeType: string }>;
     aspectRatio?: string;
     signal?: AbortSignal;
+    thinkingConfig?: ThinkingConfig;
   } = {}
 ): Promise<GeminiImageResponse> {
   const client = getClient(apiKey);
@@ -147,6 +150,7 @@ export async function generateImage(
   if (options.signal) {
     config.abortSignal = options.signal;
   }
+  config.thinkingConfig = options.thinkingConfig ?? { thinkingLevel: ThinkingLevel.MINIMAL };
 
   const chat: Chat = client.chats.create({
     model: modelId,

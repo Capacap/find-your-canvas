@@ -1,0 +1,60 @@
+## Writing generation prompts
+
+Write prompts as structured spec sheets with labeled fields. Each field isolates one aspect of the image so the model can parse intent unambiguously. Use the field labels below as headers; fill each with concise, specific content. Empty fields can be omitted.
+
+Keep fields concise, but add quality adjectives and practitioner framing. The goal is not longer descriptions but higher-signal modifiers. Prefix style terms with quality words: "detailed" painting, "rich" palette, "confident" brushstrokes, "carefully composed" shot. Frame the Style field as professional output: "by a skilled concept artist," "production-quality environment art." These modifiers stay short; they do not turn a field into a paragraph.
+
+<example>
+Brief: "Moody establishing shot of a canyon at dusk, melancholy atmosphere, stylized realism"
+
+Good prompt (augmented):
+"Subject: Deep canyon stretching into the distance.
+Composition: Carefully composed wide establishing shot from the canyon rim, looking down and across.
+Setting: Arid canyon landscape, layered rock walls.
+Lighting: Dusk. Rich warm sunlight on upper canyon walls, deep heavy shadow on the canyon floor.
+Palette: Muted amber, slate grey, deep charcoal.
+Style: Detailed stylized realism by a skilled environment concept artist. Confident visible brushstrokes on rock surfaces.
+Mood: Melancholy, vast, profoundly still."
+
+Bad prompt (padded, not augmented):
+"Subject: A deep, weathered canyon that stretches far into the hazy, atmospheric distance, its ancient walls carved by millennia of wind and water erosion.
+Composition: A sweeping, cinematic wide establishing shot taken from the very edge of the canyon rim, looking dramatically down and across the vast and awe-inspiring expanse below.
+Setting: An arid, sun-scorched canyon landscape featuring beautifully layered sedimentary rock walls that tell the story of millions of years of geological history.
+Lighting: The warm, golden glow of a dramatic dusk sky. The last lingering rays of rich amber sunlight catch the upper canyon walls while the canyon floor lies buried in deep, heavy, mysterious shadow.
+Style: Masterfully rendered, exquisitely detailed stylized realism with expressive, highly confident brushstrokes across every rock surface.
+Mood: Profoundly, deeply melancholy; overwhelmingly vast; hauntingly, timelessly still."
+</example>
+
+<commentary>
+The good prompt adds targeted modifiers: "carefully composed," "rich," "detailed," "skilled environment concept artist," "confident." Each is one or two words that signal quality. The bad prompt inflates each field into a run-on sentence, padding descriptions with redundant adjectives and prose flourishes. More words does not mean more quality signal. "Rich warm sunlight" is augmented. "The warm, golden glow of a dramatic dusk sky" is padding.
+</commentary>
+
+Always include Style and Lighting fields. Without them the model defaults to generic output.
+
+### Field reference
+
+Use these fields as needed. Not every prompt requires all of them.
+
+- **Subject:** What is in the image. The primary element.
+- **Composition:** Camera angle, framing, shot type, depth of field.
+- **Setting:** Environment, location, context around the subject.
+- **Lighting:** Light sources, direction, quality, time of day.
+- **Palette:** Dominant colors, color temperature, saturation level.
+- **Style:** Rendering approach, medium, artistic technique. Add practitioner framing ("by a skilled concept artist").
+- **Mood:** Emotional tone, atmosphere.
+- **Details:** Specific elements that must be present. Use when the brief calls out particular items.
+- **Constraints:** Requirements that override defaults. ALL CAPS for critical constraints, sparingly.
+
+### Staying faithful to the brief
+
+Your prompt should contain two kinds of content: the brief's creative elements (what was asked for) and your technical execution (how to achieve it). Camera angle, lighting setup, framing, style rendering are your technical contributions. New subjects, objects, narrative details, or scene elements that the brief did not mention are invention.
+
+Before writing, separate these in your head. If the brief says "the city has seen better days," you translate that into visual execution: weathered stone, faded paint, worn edges. You do not add crumbling bridges, abandoned ships, faded banners, or other specific objects you imagined. Those are new creative elements, not technical execution of an existing one.
+
+Techniques:
+- Positive framing over negation. "An empty, deserted street" over "no cars."
+- Relational cues, not absolute measurements.
+- Hex colors for precision when exact colors matter.
+- For photorealism, camera and lens specs in the Composition field.
+
+Match aspect ratio to the subject's proportions, not to convention.
