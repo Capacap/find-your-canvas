@@ -48,6 +48,7 @@
   let debugTab = $state<'context' | 'log'>('log');
   let lightboxImageId = $state<string | null>(null);
   let lightboxImage = $derived(app.projectImages.find((img) => img.id === lightboxImageId));
+  let imageLabelMap = $derived(new Map(app.projectImages.map((img) => [img.id, img.label])));
 
   // File attachments
   const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
@@ -264,12 +265,15 @@
     const withImages = text.replace(
       /\[image:([^\]]+)\]/g,
       (_, id) => {
-        const url = resolvedImageUrls[id];
-        if (url) return `<img src="${url}" alt="${id}" class="inline-image" data-image-id="${id}" />`;
-        return `<span class="image-missing">Image not found</span>`;
+        const label = imageLabelMap.get(id) ?? id.slice(0, 8);
+        return `<span class="image-chip" data-image-id="${id}">${escapeHtml(label)}</span>`;
       }
     );
     return marked.parse(withImages, { async: false }) as string;
+  }
+
+  function escapeHtml(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   // ── Lightbox ──
@@ -284,8 +288,11 @@
 
   function handleMessageClick(e: MouseEvent) {
     const target = e.target as HTMLElement;
-    if (target.tagName === 'IMG' && target.dataset.imageId) {
-      openLightbox(target.dataset.imageId);
+    // Support clicking on image chips (span.image-chip) or gallery images (img[data-image-id])
+    const chip = target.closest('[data-image-id]') as HTMLElement | null;
+    if (chip?.dataset.imageId) {
+      openLightbox(chip.dataset.imageId);
+      return;
     }
   }
 
@@ -1409,12 +1416,20 @@
     opacity: 0.7;
   }
 
-  :global(.inline-image) {
-    max-width: 300px;
-    max-height: 300px;
-    border-radius: 6px;
-    display: block;
-    margin: 0.5rem 0;
+  :global(.image-chip) {
+    display: inline;
+    padding: 0.1rem 0.4rem;
+    background: rgba(124, 111, 224, 0.12);
+    border: 1px solid rgba(124, 111, 224, 0.25);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: #a89eed;
+    transition: background 0.15s;
+  }
+
+  :global(.image-chip:hover) {
+    background: rgba(124, 111, 224, 0.25);
   }
 
   .gallery-image {
