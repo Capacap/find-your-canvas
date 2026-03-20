@@ -221,6 +221,13 @@ export async function deleteImage(imageId: string): Promise<void> {
   }
 }
 
+export async function toggleFavorite(imageId: string): Promise<void> {
+  await ops.toggleImageFavorite(imageId);
+  if (currentProject) {
+    projectImages = await ops.listImages(currentProject.id);
+  }
+}
+
 export async function exportProject(): Promise<void> {
   if (!currentProject) return;
   await downloadProjectZip(currentProject.id);

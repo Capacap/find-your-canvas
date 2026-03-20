@@ -48,6 +48,7 @@ interface ImageManifestEntry {
   height?: number;
   label: string;
   generationContext?: string;
+  favorite?: boolean;
   createdAt: number;
   lastAccessedAt?: number;
   filename: string;
@@ -103,6 +104,7 @@ export async function exportProject(projectId: string): Promise<Blob> {
         height: meta.height,
         label: meta.label,
         generationContext: meta.generationContext,
+        favorite: meta.favorite,
         createdAt: meta.createdAt,
         lastAccessedAt: meta.lastAccessedAt,
         filename
@@ -170,6 +172,7 @@ export async function importProject(zipBlob: Blob): Promise<Project> {
         height: entry.height,
         label: entry.label,
         generationContext: entry.generationContext,
+        favorite: entry.favorite,
         thumbnail,
         createdAt: entry.createdAt,
         lastAccessedAt: entry.lastAccessedAt ?? entry.createdAt

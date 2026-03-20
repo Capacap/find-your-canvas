@@ -86,6 +86,7 @@ describe.skipIf(!apiKey)('Specialist prompt quality', () => {
         ctx.projectName,
         ctx.agentMemories,
         ctx.projectImages,
+        ctx.favoriteImages,
         ctx.totalMemoryCount,
         ctx.totalImageCount
       );

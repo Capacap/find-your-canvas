@@ -41,8 +41,10 @@ export interface TurnContext {
   agentMemories: AgentMemory[];
   /** Total number of memories in the project (for truncation notice). */
   totalMemoryCount: number;
-  /** MRU-capped subset of project images for the system prompt. */
+  /** MRU-capped project images for the system prompt. */
   projectImages: ImageMeta[];
+  /** User-favorited images, MRU-ordered. May overlap with projectImages. */
+  favoriteImages: ImageMeta[];
   /** Total number of images in the project (for truncation notice). */
   totalImageCount: number;
   /** Raw Gemini history from the agent session. */
@@ -55,6 +57,7 @@ export interface TurnContext {
 export interface TurnActions {
   createImage(blob: Blob, label: string, opts?: { source?: ImageSource; generationContext?: string }): Promise<ImageMeta>;
   getImage(id: string): Promise<(ImageMeta & ImageBlob) | undefined>;
+  getImageMeta(id: string): Promise<ImageMeta | undefined>;
   getImageThumbnail(id: string): Promise<{ base64: string; mimeType: string } | undefined>;
   touchImages(ids: string[]): Promise<void>;
   searchImages(query: string): Promise<ImageMeta[]>;

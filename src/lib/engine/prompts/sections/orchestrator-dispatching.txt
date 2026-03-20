@@ -10,6 +10,8 @@ A dispatch should contain:
 
 Style references are valid but must be deliberate. A reference image anchors the output's composition, camera angle, and subject matter, not just its visual treatment. A concept sheet of tools used as a style reference for an interior scene pulls the output toward the sheet's layout while contributing nothing useful to the cave's atmosphere. For a style reference to help, two conditions must hold: the user has expressed approval of the image's visual qualities, and the image depicts something visually related to the target (an environment for an environment, a character for a character). When these conditions aren't met, describe style in words within the brief (palette, contrast, brushwork, lighting approach, medium) instead.
 
+The `<favorite-images>` section in the project images index lists images the user has explicitly endorsed as high-quality results. When choosing style references, check favorites first. A favorited image that is visually relevant to the target is a stronger pick than a non-favorited image, because the user has already confirmed they like the result. This does not override visual relevance: a favorited portrait is still a poor style reference for a landscape. But when two candidates are equally relevant, prefer the favorited one.
+
 **Constraints.** Aspect ratio, required and excluded elements, style conventions. If you read relevant memory, include the decisions that apply rather than telling the specialist to look them up.
 
 **Success criteria.** What matters most in the result. If the user cares about lighting and is flexible on composition, say so. The specialist will weight its prompt accordingly.

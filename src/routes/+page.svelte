@@ -17,7 +17,8 @@
     revokeImageUrls,
     exportProject,
     importProject,
-    deleteImage
+    deleteImage,
+    toggleFavorite
   } from '$lib/stores/appState.svelte';
   import { getTurnState, sendMessage, retryMessage, rollbackTurn, clearTurnError, clearDebugLog, cancelTurn } from '$lib/stores/turnState.svelte';
   import { debugInjectFault, buildOrchestratorPrompt } from '$lib/engine/turn';
@@ -387,7 +388,7 @@
       // Use the stored system prompt from the session if available (snapshot
       // of what the model actually saw), otherwise reconstruct from current state.
       const systemPrompt = session?.systemPrompt
-        || buildOrchestratorPrompt(app.currentProject.name, app.agentMemories, app.projectImages);
+        || buildOrchestratorPrompt(app.currentProject.name, app.agentMemories, app.projectImages, app.projectImages.filter(img => img.favorite));
 
       // Fetch subagent sessions for this conversation.
       const allSessions = await listAgentSessions(app.currentConversation.id);
@@ -583,6 +584,12 @@
                     {/if}
                     <span class="gallery-label">{img.label}</span>
                   </button>
+                  <button
+                    class="gallery-favorite"
+                    class:favorited={img.favorite}
+                    onclick={() => toggleFavorite(img.id)}
+                    title={img.favorite ? 'Remove from favorites' : 'Add to favorites'}
+                  >&#9733;</button>
                   <button
                     class="gallery-delete"
                     onclick={() => handleDeleteImage(img.id, img.label)}
@@ -906,6 +913,13 @@
           {#if lightboxImage.generationContext}
             <span class="lightbox-context">{lightboxImage.generationContext}</span>
           {/if}
+          <button
+            class="lightbox-favorite"
+            class:favorited={lightboxImage.favorite}
+            onclick={() => toggleFavorite(lightboxImage.id)}
+          >
+            &#9733; {lightboxImage.favorite ? 'Favorited' : 'Favorite'}
+          </button>
         </div>
       {/if}
     </div>
@@ -1220,8 +1234,34 @@
     position: relative;
   }
 
-  .gallery-item:hover .gallery-delete {
+  .gallery-item:hover .gallery-delete,
+  .gallery-item:hover .gallery-favorite:not(.favorited) {
     opacity: 1;
+  }
+
+  .gallery-favorite {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    opacity: 0;
+    background: rgba(0, 0, 0, 0.7);
+    border: none;
+    color: #888;
+    font-size: 0.9rem;
+    padding: 0 0.35rem;
+    cursor: pointer;
+    line-height: 1.4;
+    border-radius: 4px;
+    z-index: 1;
+  }
+
+  .gallery-favorite:hover {
+    color: #f5c542;
+  }
+
+  .gallery-favorite.favorited {
+    opacity: 1;
+    color: #f5c542;
   }
 
   .gallery-delete {
@@ -1749,6 +1789,28 @@
     font-size: 0.8rem;
     margin-top: 0.25rem;
     line-height: 1.4;
+  }
+
+  :global(.lightbox-favorite) {
+    display: inline-block;
+    margin-top: 0.5rem;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid #555;
+    color: #888;
+    font-size: 0.85rem;
+    padding: 0.3rem 0.75rem;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+
+  :global(.lightbox-favorite:hover) {
+    border-color: #f5c542;
+    color: #f5c542;
+  }
+
+  :global(.lightbox-favorite.favorited) {
+    color: #f5c542;
+    border-color: #f5c542;
   }
 
   /* Debug toggle */

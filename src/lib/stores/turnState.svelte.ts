@@ -127,10 +127,13 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
   await refreshMessages();
 
   // Fetch MRU-capped artifact lists for the system prompt.
+  // Favorites and MRU are separate sections with independent caps.
   const IMAGE_MRU_CAP = 30;
+  const FAVORITE_CAP = 20;
   const MEMORY_MRU_CAP = 20;
-  const [mruImages, imageCount, mruMemories, memoryCount] = await Promise.all([
+  const [mruImages, favorites, imageCount, mruMemories, memoryCount] = await Promise.all([
     ops.listImagesMRU(projectId, IMAGE_MRU_CAP),
+    ops.listFavoriteImages(projectId, FAVORITE_CAP),
     ops.countImages(projectId),
     ops.listMemoriesMRU(projectId, MEMORY_MRU_CAP),
     ops.countMemories(projectId)
@@ -144,6 +147,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
     agentMemories: mruMemories,
     totalMemoryCount: memoryCount,
     projectImages: mruImages,
+    favoriteImages: favorites,
     totalImageCount: imageCount,
     apiHistory: $state.snapshot(session.history),
     signal: abortController.signal
@@ -152,6 +156,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
   const actions: TurnActions = {
     createImage: (blob, label, actionOpts) => ops.createImage(projectId, blob, label, actionOpts),
     getImage: ops.getImage,
+    getImageMeta: ops.getImageMeta,
     getImageThumbnail: ops.getImageThumbnail,
     touchImages: (ids) => ops.touchImages(ids),
     searchImages: (query) => ops.searchImages(projectId, query),

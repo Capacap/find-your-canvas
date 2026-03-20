@@ -32,6 +32,7 @@ export function getImageToImageAgent(
   projectName: string,
   memories: AgentMemory[],
   images: ImageMeta[],
+  favoriteImages: ImageMeta[],
   totalMemoryCount?: number,
   totalImageCount?: number
 ): AgentDefinition {
@@ -39,7 +40,7 @@ export function getImageToImageAgent(
     systemPrompt: interpolate(imageToImageTemplate, {
       projectName,
       memorySection: buildMemorySection(memories, totalMemoryCount),
-      imageIndexSection: buildImageIndex(images, totalImageCount)
+      imageIndexSection: buildImageIndex(images, favoriteImages, totalImageCount)
     }),
     toolDeclarations: [
       generateImageDeclaration,

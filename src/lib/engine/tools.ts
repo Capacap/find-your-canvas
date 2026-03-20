@@ -82,6 +82,10 @@ export const viewImagesDeclaration: FunctionDeclaration = {
       reason: {
         type: Type.STRING,
         description: 'Brief note on why you need to see these images (helps the user follow your thinking).'
+      },
+      include_metadata: {
+        type: Type.BOOLEAN,
+        description: 'If true, return full metadata alongside each image: source, dimensions, generation prompt, favorite status. Useful when you need to inspect how an image was produced.'
       }
     },
     required: ['image_ids']
@@ -236,6 +240,7 @@ export const handleGenerateImage: ToolHandler = async (toolName, callId, args, c
 export const handleViewImages: ToolHandler = async (toolName, callId, args, _ctx, actions, onEvent) => {
   const imageIds = ((args.image_ids as string[]) ?? []).slice(0, MAX_VIEW_IMAGES);
   const reason = args.reason as string | undefined;
+  const includeMetadata = args.include_metadata as boolean | undefined;
 
   if (imageIds.length === 0) {
     return { responseParts: [functionResponsePart(toolName, callId, { error: 'No image IDs provided.' })] };
@@ -246,6 +251,7 @@ export const handleViewImages: ToolHandler = async (toolName, callId, args, _ctx
   try {
     const imageParts: Part[] = [];
     const outputLines: string[] = [];
+    const metadataLines: string[] = [];
     const notFound: string[] = [];
 
     for (const imageId of imageIds) {
@@ -256,6 +262,20 @@ export const handleViewImages: ToolHandler = async (toolName, callId, args, _ctx
       }
       outputLines.push(imageId);
       imageParts.push({ inlineData: { data: thumb.base64, mimeType: thumb.mimeType } });
+
+      if (includeMetadata) {
+        const meta = await actions.getImageMeta(imageId);
+        if (meta) {
+          const fields: string[] = [
+            `source: ${meta.source}`,
+            `label: "${meta.label}"`,
+          ];
+          if (meta.width && meta.height) fields.push(`dimensions: ${meta.width}x${meta.height}`);
+          if (meta.favorite) fields.push('favorite: true');
+          if (meta.generationContext) fields.push(`prompt: "${meta.generationContext}"`);
+          metadataLines.push(`${imageId}: { ${fields.join(', ')} }`);
+        }
+      }
     }
 
     if (imageParts.length === 0) {
@@ -265,6 +285,9 @@ export const handleViewImages: ToolHandler = async (toolName, callId, args, _ctx
     let output = `Showing ${imageParts.length} image(s) in order: ${outputLines.join(', ')}`;
     if (notFound.length > 0) {
       output += `. Not found: ${notFound.join(', ')}`;
+    }
+    if (metadataLines.length > 0) {
+      output += '\n\nMetadata:\n' + metadataLines.join('\n');
     }
 
     // Touch viewed images so they bubble up in the MRU index.
@@ -340,6 +363,7 @@ export const handleSearchImages: ToolHandler = async (toolName, callId, args, _c
     const lines = capped.map(img => {
       const source = img.source === 'user' ? 'user_uploaded' : 'generated';
       const fields: string[] = [`id: ${img.id}`, `source: ${source}`];
+      if (img.favorite) fields.push('favorite: true');
       if (img.generationContext) {
         const genCtx = img.generationContext;
         fields.push(`prompt: "${genCtx.length > 120 ? genCtx.slice(0, 120) + '...' : genCtx}"`);

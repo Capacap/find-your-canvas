@@ -191,7 +191,7 @@ async function runAgentTurnInner(
 
   // Build the agent definition from current project state.
   const agent = getOrchestratorAgent(
-    ctx.projectName, ctx.agentMemories, ctx.projectImages,
+    ctx.projectName, ctx.agentMemories, ctx.projectImages, ctx.favoriteImages,
     ctx.totalMemoryCount, ctx.totalImageCount
   );
   const { systemPrompt, toolDeclarations, toolHandlers } = agent;

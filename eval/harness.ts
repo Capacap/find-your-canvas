@@ -78,6 +78,13 @@ export function createMockActions(stores: MockStores): TurnActions {
       return { ...entry, id, blob: entry.blob };
     },
 
+    async getImageMeta(id: string): Promise<ImageMeta | undefined> {
+      const entry = stores.images.get(id);
+      if (!entry) return undefined;
+      const { blob: _, ...meta } = entry;
+      return meta;
+    },
+
     async getImageThumbnail(id: string): Promise<{ base64: string; mimeType: string } | undefined> {
       // Auto-create placeholder entries for mock-generated image IDs
       // so dispatch handler thumbnail lookups work.
@@ -232,6 +239,7 @@ export function createContext(opts: {
     agentMemories: opts.memories ?? [],
     totalMemoryCount: opts.memories?.length ?? 0,
     projectImages: opts.images ?? [],
+    favoriteImages: (opts.images ?? []).filter(img => img.favorite),
     totalImageCount: opts.images?.length ?? 0,
     apiHistory: [],
     signal: opts.signal

@@ -85,7 +85,7 @@ function makeAgent(variantKey: string): AgentDefinition {
   const systemPrompt = interpolate(template, {
     projectName: 'Stone Age Indie Game',
     memorySection: buildMemorySection([]),
-    imageIndexSection: buildImageIndex([])
+    imageIndexSection: buildImageIndex([], [])
   });
 
   return {

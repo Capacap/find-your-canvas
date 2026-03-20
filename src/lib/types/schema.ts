@@ -95,6 +95,8 @@ export interface ImageMeta {
   height?: number;
   /** Human-readable label assigned by the agent or user. */
   label: string;
+  /** User has marked this image as especially good. */
+  favorite?: boolean;
   /** The prompt or context that produced this image. */
   generationContext?: string;
   /** Downscaled JPEG (max 512px) for gallery display and model context. */

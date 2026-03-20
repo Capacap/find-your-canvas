@@ -31,6 +31,7 @@ export function getTextToImageAgent(
   projectName: string,
   memories: AgentMemory[],
   images: ImageMeta[],
+  favoriteImages: ImageMeta[],
   totalMemoryCount?: number,
   totalImageCount?: number
 ): AgentDefinition {
@@ -38,7 +39,7 @@ export function getTextToImageAgent(
     systemPrompt: interpolate(textToImageTemplate, {
       projectName,
       memorySection: buildMemorySection(memories, totalMemoryCount),
-      imageIndexSection: buildImageIndex(images, totalImageCount)
+      imageIndexSection: buildImageIndex(images, favoriteImages, totalImageCount)
     }),
     toolDeclarations: [
       generateImageDeclaration,

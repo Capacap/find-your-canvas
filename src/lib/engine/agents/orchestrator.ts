@@ -42,13 +42,14 @@ export function buildOrchestratorPrompt(
   projectName: string,
   agentMemories: AgentMemory[],
   projectImages: ImageMeta[],
+  favoriteImages: ImageMeta[],
   totalMemoryCount?: number,
   totalImageCount?: number
 ): string {
   return interpolate(orchestratorTemplate, {
     projectName,
     memorySection: buildMemorySection(agentMemories, totalMemoryCount),
-    imageIndexSection: buildImageIndex(projectImages, totalImageCount)
+    imageIndexSection: buildImageIndex(projectImages, favoriteImages, totalImageCount)
   });
 }
 
@@ -99,7 +100,7 @@ function makeDispatchHandler(
     onEvent({ type: 'subagent_start', agentType, dispatchId });
 
     try {
-      const definition = getAgent(ctx.projectName, ctx.agentMemories, ctx.projectImages, ctx.totalMemoryCount, ctx.totalImageCount);
+      const definition = getAgent(ctx.projectName, ctx.agentMemories, ctx.projectImages, ctx.favoriteImages, ctx.totalMemoryCount, ctx.totalImageCount);
       const result = await runSubagent(definition, prompt, ctx, actions, onEvent);
 
       onEvent({ type: 'subagent_end', agentType, dispatchId, imageIds: result.imageIds });
@@ -143,11 +144,12 @@ export function getOrchestratorAgent(
   projectName: string,
   memories: AgentMemory[],
   images: ImageMeta[],
+  favoriteImages: ImageMeta[],
   totalMemoryCount?: number,
   totalImageCount?: number
 ): AgentDefinition {
   return {
-    systemPrompt: buildOrchestratorPrompt(projectName, memories, images, totalMemoryCount, totalImageCount),
+    systemPrompt: buildOrchestratorPrompt(projectName, memories, images, favoriteImages, totalMemoryCount, totalImageCount),
     toolDeclarations: [
       dispatchTextToImageDeclaration,
       dispatchImageToImageDeclaration,

@@ -116,39 +116,53 @@ function buildMemorySection(
   return `<project-memory>\n${section}\n</project-memory>`;
 }
 
+/** Format a single image entry for the index. */
+function formatImageEntry(img: ImageMeta): string {
+  const source = img.source === 'user' ? 'user_uploaded' : 'generated';
+  const fields: string[] = [`id: ${img.id}`, `source: ${source}`];
+  if (img.generationContext) {
+    const genCtx = img.generationContext;
+    fields.push(`prompt: "${genCtx.length > 120 ? genCtx.slice(0, 120) + '...' : genCtx}"`);
+  }
+  return `- ${img.label} - { ${fields.join(', ')} }`;
+}
+
 /** Render the image index for injection into agent prompts.
+ *  Favorites and recent images are separate sections with independent purposes.
  *  Wrapped in <project-images> to separate dynamic context from static instructions. */
-function buildImageIndex(images: ImageMeta[], totalCount?: number): string {
-  if (images.length === 0) {
+function buildImageIndex(images: ImageMeta[], favorites: ImageMeta[], totalCount?: number): string {
+  if (images.length === 0 && favorites.length === 0) {
     return '<project-images>\n## Project Images\n\nNo images in this project yet.\n</project-images>';
   }
 
   const total = totalCount ?? images.length;
   const truncated = total > images.length;
+  const lines: string[] = ['## Project Images'];
 
-  const lines: string[] = [
-    '## Project Images',
-    '',
+  if (favorites.length > 0) {
+    lines.push('');
+    lines.push('<favorite-images>');
+    lines.push('The user has endorsed these images as high-quality results. Prefer these as style references when they are visually relevant to the task.');
+    lines.push('');
+    for (const img of favorites) lines.push(formatImageEntry(img));
+    lines.push('</favorite-images>');
+  }
+
+  lines.push('');
+  lines.push('<recent-images>');
+  lines.push(
     truncated
       ? 'Ordered by most recently used. Use `view_images` to examine any image before referencing it. Use `search_images` to find images not listed here.'
-      : 'Use `view_images` to examine any image before referencing it.',
-    ''
-  ];
-
-  for (const img of images) {
-    const source = img.source === 'user' ? 'user_uploaded' : 'generated';
-    const fields: string[] = [`id: ${img.id}`, `source: ${source}`];
-    if (img.generationContext) {
-      const genCtx = img.generationContext;
-      fields.push(`prompt: "${genCtx.length > 120 ? genCtx.slice(0, 120) + '...' : genCtx}"`);
-    }
-    lines.push(`- ${img.label} - { ${fields.join(', ')} }`);
-  }
+      : 'Use `view_images` to examine any image before referencing it.'
+  );
+  lines.push('');
+  for (const img of images) lines.push(formatImageEntry(img));
 
   if (truncated) {
     lines.push('');
     lines.push(`*Showing ${images.length} most recently used of ${total} total images. Use \`search_images\` to find others.*`);
   }
+  lines.push('</recent-images>');
 
   return `<project-images>\n${lines.join('\n')}\n</project-images>`;
 }

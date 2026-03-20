@@ -537,6 +537,11 @@ export async function getImageBlob(id: string): Promise<ImageBlob | undefined> {
   return db.imageBlobs.get(id);
 }
 
+/** Get image metadata without loading the full-size blob. */
+export async function getImageMeta(id: string): Promise<ImageMeta | undefined> {
+  return db.imageMeta.get(id);
+}
+
 /** List image metadata for a project (no blobs loaded). */
 export async function listImages(projectId: string): Promise<ImageMeta[]> {
   return db.imageMeta.where('projectId').equals(projectId).toArray();
@@ -566,6 +571,26 @@ export async function listImagesMRU(projectId: string, limit?: number): Promise<
     .reverse();
   if (limit) collection = collection.limit(limit);
   return collection.toArray();
+}
+
+/** List favorited images for a project, most recently used first. */
+export async function listFavoriteImages(projectId: string, limit?: number): Promise<ImageMeta[]> {
+  const all = await db.imageMeta
+    .where('[projectId+lastAccessedAt]')
+    .between([projectId, -Infinity], [projectId, Infinity])
+    .reverse()
+    .filter(img => img.favorite === true)
+    .toArray();
+  return limit ? all.slice(0, limit) : all;
+}
+
+/** Toggle the favorite flag on an image. Returns the new value. */
+export async function toggleImageFavorite(id: string): Promise<boolean> {
+  const img = await db.imageMeta.get(id);
+  if (!img) throw new Error(`Image not found: ${id}`);
+  const newValue = !img.favorite;
+  await db.imageMeta.update(id, { favorite: newValue });
+  return newValue;
 }
 
 /** Search images by label or generationContext (case-insensitive substring match). */
