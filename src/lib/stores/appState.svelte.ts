@@ -19,7 +19,7 @@ let settings = $state<Settings | null>(null);
 
 // Image URL cache with LRU eviction. Map iteration order tracks insertion,
 // and we re-insert on access to promote recently used entries.
-const IMAGE_URL_CACHE_MAX = 50;
+const IMAGE_URL_CACHE_MAX = 200;
 const imageUrlCache = new Map<string, string>();
 const imageUrlInflight = new Map<string, Promise<string | null>>();
 
