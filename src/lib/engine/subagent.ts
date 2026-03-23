@@ -67,7 +67,7 @@ export async function runSubagent(
   for (let round = 0; round < MAX_SUBAGENT_ROUNDS; round++) {
     if (ctx.signal?.aborted) throw new DOMException('Subagent cancelled', 'AbortError');
 
-    onEvent({ type: 'status', text: round === 0 ? 'Specialist thinking...' : 'Specialist processing tools...' });
+    onEvent({ type: 'status', text: 'Thinking...' });
 
     const { stream, getResult } = await sendMessageStreaming(
       ctx.apiKey,

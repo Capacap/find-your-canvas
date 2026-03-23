@@ -365,31 +365,29 @@
   // This eliminates turn-lifecycle transitions: the spacer is always
   // present, sized purely by content geometry.
 
-  let userNearBottom = $state(true);
   let spacerEl = $state<HTMLElement | null>(null);
 
   function trackChatScroll(node: HTMLElement) {
     chatScrollEl = node;
     const parent = node.parentElement!;
-    const chatColumn = node.querySelector('.chat-column')!;
     function update() {
       const atTop = node.scrollTop <= 2;
       const gap = node.scrollHeight - node.scrollTop - node.clientHeight;
       const atBottom = gap <= 2;
-      userNearBottom = gap <= 80;
+
       parent.classList.toggle('at-top', atTop);
       parent.classList.toggle('at-bottom', atBottom);
     }
     update();
     node.addEventListener('scroll', update, { passive: true });
-    // Observe both the viewport (for window resizes) and the content column
-    // (for content changes like activity log toggling, image loads, etc.)
+    // Observe viewport for window/panel resizes only.
+    // Content changes (activity log toggling, streaming) do NOT
+    // recalculate the spacer — that only happens on message changes.
     const ro = new ResizeObserver(() => {
       update();
       updateSpacer();
     });
     ro.observe(node);
-    ro.observe(chatColumn);
     return {
       destroy() {
         node.removeEventListener('scroll', update);
@@ -434,18 +432,15 @@
   }
 
   $effect(() => {
-    // Subscribe to reactive content changes.
-    // $effect runs after Svelte has flushed DOM updates, so spacer
-    // and scroll adjustments apply before the browser paints.
+    // Recalculate spacer when messages change, streaming content grows,
+    // or a pending user message appears. Activity log changes are
+    // excluded — toggling or new entries could interact with the spacer
+    // and cause scroll jumps.
     app.messages;
     turn.streamingText;
-    turn.activityLog;
     pendingUserText;
 
     updateSpacer();
-    if (userNearBottom && chatScrollEl) {
-      chatScrollEl.scrollTop = chatScrollEl.scrollHeight;
-    }
   });
 </script>
 
@@ -679,7 +674,9 @@
                       <details
                         class="persisted-activity"
                         open={isLastAssistant && activityExpanded ? true : undefined}
-                        ontoggle={(e) => { if (isLastAssistant) activityExpanded = e.currentTarget.open; updateSpacer(); }}
+                        ontoggle={(e) => {
+                          if (isLastAssistant) activityExpanded = e.currentTarget.open;
+                        }}
                       >
                         <summary>
                           {lastLogEntry.text}
@@ -773,7 +770,9 @@
                       <details
                         class="persisted-activity"
                         open={activityExpanded || undefined}
-                        ontoggle={(e) => { activityExpanded = e.currentTarget.open; updateSpacer(); }}
+                        ontoggle={(e) => {
+                          activityExpanded = e.currentTarget.open;
+                        }}
                       >
                         <summary>
                           <span class="activity-dot"></span>
@@ -1246,6 +1245,7 @@
 
   .chat-spacer {
     flex-shrink: 0;
+    overflow-anchor: none;
   }
 
   /* scroll-margin-top on [data-turn-anchor] is set dynamically in anchorToUserMessage() */

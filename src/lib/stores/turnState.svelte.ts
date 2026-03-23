@@ -197,7 +197,6 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
       streamingThought += event.text;
     } else if (event.type === 'status') {
       statusText = event.text;
-      if (event.text) logActivity(event.text);
     }
     else if (event.type === 'image_generating') {
       if (subagentProgress) {

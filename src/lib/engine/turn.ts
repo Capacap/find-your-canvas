@@ -237,7 +237,7 @@ async function runAgentTurnInner(
         throw new Error(`[simulated] Fault injected on round ${round}`);
       }
 
-      onEvent({ type: 'status', text: round === 0 ? 'Thinking...' : 'Processing tool results...' });
+      onEvent({ type: 'status', text: 'Thinking...' });
       onEvent({ type: 'debug_request', round, parts: redactParts(currentParts), historyLength: apiHistory.length });
 
       if (ctx.signal?.aborted) throw new DOMException('Turn cancelled', 'AbortError');
