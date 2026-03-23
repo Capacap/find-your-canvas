@@ -394,9 +394,14 @@
     };
   }
 
-  /** Resize the spacer so the last user message can sit at the viewport top. */
-  const SCROLL_TOP_MARGIN = 64; // must match scroll-margin-top on [data-turn-anchor]
-
+  /**
+   * Resize the spacer so the last user message sits at the same vertical
+   * position as the first message when scrolled to the top.
+   *
+   * Zero the spacer, measure natural scroll height, then solve for the
+   * spacer height that makes the geometry work. All values use offsetTop
+   * (same reference frame: the scroll container), no magic numbers.
+   */
   function updateSpacer() {
     if (!spacerEl || !chatScrollEl) return;
     const chatColumn = spacerEl.parentElement!;
@@ -406,12 +411,19 @@
       spacerEl.style.height = '0px';
       return;
     }
-    const viewportH = chatScrollEl.clientHeight;
-    // spacerEl.offsetTop = height of all content above the spacer (excludes spacer itself)
-    const contentBottom = spacerEl.offsetTop;
-    const belowUser = contentBottom - lastUser.offsetTop;
-    // Reserve SCROLL_TOP_MARGIN so the message clears the header/fade overlay
-    spacerEl.style.height = `${Math.max(0, viewportH - belowUser - SCROLL_TOP_MARGIN)}px`;
+    // The scroll container's top padding is the visual gap from viewport top
+    // to first content. Use it directly instead of measuring a DOM element
+    // that might be a hidden system-notice.
+    const topPad = parseFloat(getComputedStyle(chatScrollEl).paddingTop);
+    // Zero the spacer so it doesn't affect scrollHeight measurement.
+    spacerEl.style.height = '0px';
+    const naturalScrollH = chatScrollEl.scrollHeight;
+    // Target: at scroll-bottom, lastUser sits topPad px from viewport top.
+    // scrollTop_bottom = scrollHeight - clientHeight
+    // lastUser.offsetTop - scrollTop_bottom = topPad
+    // scrollHeight = lastUser.offsetTop - topPad + clientHeight
+    const targetScrollH = lastUser.offsetTop - topPad + chatScrollEl.clientHeight;
+    spacerEl.style.height = `${Math.max(0, targetScrollH - naturalScrollH)}px`;
   }
 
   function anchorToUserMessage() {
@@ -419,6 +431,8 @@
     const anchor = chatScrollEl.querySelector('[data-turn-anchor]') as HTMLElement | null;
     if (!anchor) return;
     updateSpacer();
+    const topPad = parseFloat(getComputedStyle(chatScrollEl).paddingTop);
+    anchor.style.scrollMarginTop = `${topPad}px`;
     anchor.scrollIntoView({ block: 'start', behavior: 'instant' });
   }
 
@@ -653,13 +667,12 @@
               {/if}
               {#each app.messages as msg, i}
                 {@const isLastAssistant = msg.role === 'assistant' && !app.messages.slice(i + 1).some((m: { role: string }) => m.role === 'assistant')}
+                {#if msg.role === 'user' && isSystemNotice(msg.text)}
+                  <!-- hidden: agent-first initiation message -->
+                {:else}
                 <div class="message" class:user={msg.role === 'user'} class:assistant={msg.role === 'assistant'} class:last-assistant={isLastAssistant}>
-                  {#if msg.role === 'user' && isSystemNotice(msg.text)}
-                    <!-- hidden: agent-first initiation message -->
-                  {:else}
                     <div class="message-role">{msg.role === 'user' ? 'You' : 'Assistant'}</div>
                     <div class="message-text">{@html renderMessageText(msg.text)}</div>
-                  {/if}
                   {#each msg.imageIds as imgId}
                     <div class="message-image">
                       {#if resolvedImageUrls[imgId]}
@@ -705,6 +718,7 @@
                     </div>
                   {/if}
                 </div>
+                {/if}
               {/each}
 
               <!-- Optimistic user message (shown until persisted) -->
@@ -1199,9 +1213,7 @@
     flex-shrink: 0;
   }
 
-  .message[data-turn-anchor] {
-    scroll-margin-top: 64px;
-  }
+  /* scroll-margin-top on [data-turn-anchor] is set dynamically in anchorToUserMessage() */
 
   .message-role {
     font-size: var(--text-xs);
