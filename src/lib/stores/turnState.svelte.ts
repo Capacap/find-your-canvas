@@ -36,6 +36,13 @@ export interface SubagentProgress {
   steps: SubagentStep[];
 }
 
+/** A single entry in the chronological activity log shown during a turn. */
+export interface ActivityEntry {
+  text: string;
+  /** Indented entries are subagent child steps. */
+  nested: boolean;
+}
+
 let isRunning = $state(false);
 let streamingText = $state('');
 let streamingThought = $state('');
@@ -45,6 +52,7 @@ let debugEvents = $state<EngineEvent[]>([]);
 let retryInput = $state('');
 let retryImageIds = $state<string[]>([]);
 let subagentProgress = $state<SubagentProgress | null>(null);
+let activityLog = $state<ActivityEntry[]>([]);
 let abortController: AbortController | null = null;
 
 export function getTurnState() {
@@ -57,7 +65,8 @@ export function getTurnState() {
     get debugEvents() { return debugEvents; },
     get retryInput() { return retryInput; },
     get retryImageIds() { return retryImageIds; },
-    get subagentProgress() { return subagentProgress; }
+    get subagentProgress() { return subagentProgress; },
+    get activityLog() { return activityLog; }
   };
 }
 
@@ -121,6 +130,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
   statusText = 'Thinking...';
   errorText = '';
   subagentProgress = null;
+  activityLog = [];
 
   // Clean up any leftover error-turn messages from previous failures.
   await ops.deleteErrorMessages(conversationId);
@@ -168,6 +178,13 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
     searchMemories: (query) => ops.searchMemories(projectId, query)
   };
 
+  /** Append to the activity log, avoiding duplicate consecutive entries. */
+  const logActivity = (text: string, nested = false) => {
+    const last = activityLog[activityLog.length - 1];
+    if (last && last.text === text && last.nested === nested) return;
+    activityLog = [...activityLog, { text, nested }];
+  };
+
   const onEvent = (event: EngineEvent) => {
     if (event.type.startsWith('debug_')) {
       debugEvents = [...debugEvents, event];
@@ -178,7 +195,10 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
       statusText = '';
     } else if (event.type === 'thought_delta') {
       streamingThought += event.text;
-    } else if (event.type === 'status') statusText = event.text;
+    } else if (event.type === 'status') {
+      statusText = event.text;
+      if (event.text) logActivity(event.text);
+    }
     else if (event.type === 'image_generating') {
       if (subagentProgress) {
         subagentProgress = {
@@ -187,6 +207,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
         };
       }
       statusText = `Generating: ${event.label}...`;
+      logActivity(`Generating: ${event.label}`, !!subagentProgress);
     }
     else if (event.type === 'image_complete') {
       opts.onImageGenerated?.(event.imageId);
@@ -206,6 +227,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
         };
       }
       statusText = `Viewing ${event.imageIds.length} image(s)...`;
+      logActivity('Viewing images', !!subagentProgress);
     }
     else if (event.type === 'subagent_start') {
       subagentProgress = {
@@ -213,6 +235,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
         steps: []
       };
       statusText = '';
+      logActivity(`Dispatching ${event.agentType} agent`);
     }
     else if (event.type === 'subagent_end') {
       for (const imageId of event.imageIds) {
@@ -224,6 +247,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
     else if (event.type === 'memory_updated') {
       refreshAgentMemories();
       statusText = `Memory updated: ${event.slug}`;
+      logActivity(`Memory updated: ${event.slug}`);
     }
     else if (event.type === 'error') errorText = event.message;
     else if (event.type === 'done') {
@@ -240,7 +264,10 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
     const preTurnHistoryLength = ctx.apiHistory.length;
     const result = await runAgentTurn(ctx, actions, opts.text, onEvent, attachments, opts.reattachImageIds ?? []);
 
-    await ops.saveTurnResult(projectId, conversationId, session.id, result, preTurnHistoryLength);
+    await ops.saveTurnResult(projectId, conversationId, session.id, {
+      ...result,
+      activityLog: activityLog.length > 0 ? $state.snapshot(activityLog) : undefined
+    }, preTurnHistoryLength);
 
     // Only refresh UI state if the user hasn't navigated away during the turn.
     if (getAppState().currentConversation?.id === conversationId) {

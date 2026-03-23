@@ -45,6 +45,7 @@
   let rollbackImageIds = $state<string[]>([]);
   let pendingUserText = $state<string | null>(null);
   let chatScrollEl = $state<HTMLElement | null>(null);
+  let activityExpanded = $state(false);
   let apiKeyInput = $state('');
 
   // Sync API key input with store
@@ -370,6 +371,7 @@
   function trackChatScroll(node: HTMLElement) {
     chatScrollEl = node;
     const parent = node.parentElement!;
+    const chatColumn = node.querySelector('.chat-column')!;
     function update() {
       const atTop = node.scrollTop <= 2;
       const gap = node.scrollHeight - node.scrollTop - node.clientHeight;
@@ -380,11 +382,14 @@
     }
     update();
     node.addEventListener('scroll', update, { passive: true });
+    // Observe both the viewport (for window resizes) and the content column
+    // (for content changes like activity log toggling, image loads, etc.)
     const ro = new ResizeObserver(() => {
       update();
       updateSpacer();
     });
     ro.observe(node);
+    ro.observe(chatColumn);
     return {
       destroy() {
         node.removeEventListener('scroll', update);
@@ -398,9 +403,9 @@
    * Resize the spacer so the last user message sits at the same vertical
    * position as the first message when scrolled to the top.
    *
-   * Zero the spacer, measure natural scroll height, then solve for the
-   * spacer height that makes the geometry work. All values use offsetTop
-   * (same reference frame: the scroll container), no magic numbers.
+   * Subtracts the current spacer height from scrollHeight to derive the
+   * natural content height without zeroing the spacer (which would cause
+   * the browser to clamp scrollTop and produce scroll jumps).
    */
   function updateSpacer() {
     if (!spacerEl || !chatScrollEl) return;
@@ -411,17 +416,9 @@
       spacerEl.style.height = '0px';
       return;
     }
-    // The scroll container's top padding is the visual gap from viewport top
-    // to first content. Use it directly instead of measuring a DOM element
-    // that might be a hidden system-notice.
     const topPad = parseFloat(getComputedStyle(chatScrollEl).paddingTop);
-    // Zero the spacer so it doesn't affect scrollHeight measurement.
-    spacerEl.style.height = '0px';
-    const naturalScrollH = chatScrollEl.scrollHeight;
-    // Target: at scroll-bottom, lastUser sits topPad px from viewport top.
-    // scrollTop_bottom = scrollHeight - clientHeight
-    // lastUser.offsetTop - scrollTop_bottom = topPad
-    // scrollHeight = lastUser.offsetTop - topPad + clientHeight
+    const currentSpacerH = spacerEl.offsetHeight;
+    const naturalScrollH = chatScrollEl.scrollHeight - currentSpacerH;
     const targetScrollH = lastUser.offsetTop - topPad + chatScrollEl.clientHeight;
     spacerEl.style.height = `${Math.max(0, targetScrollH - naturalScrollH)}px`;
   }
@@ -437,18 +434,18 @@
   }
 
   $effect(() => {
-    // Subscribe to reactive content changes
+    // Subscribe to reactive content changes.
+    // $effect runs after Svelte has flushed DOM updates, so spacer
+    // and scroll adjustments apply before the browser paints.
     app.messages;
     turn.streamingText;
-    turn.statusText;
+    turn.activityLog;
     pendingUserText;
 
-    requestAnimationFrame(() => {
-      updateSpacer();
-      if (userNearBottom && chatScrollEl) {
-        chatScrollEl.scrollTop = chatScrollEl.scrollHeight;
-      }
-    });
+    updateSpacer();
+    if (userNearBottom && chatScrollEl) {
+      chatScrollEl.scrollTop = chatScrollEl.scrollHeight;
+    }
   });
 </script>
 
@@ -671,6 +668,37 @@
                   <!-- hidden: agent-first initiation message -->
                 {:else}
                 <div class="message" class:user={msg.role === 'user'} class:assistant={msg.role === 'assistant'} class:last-assistant={isLastAssistant}>
+                  {#if msg.role === 'assistant' && msg.activityLog?.length}
+                    {@const log = msg.activityLog}
+                    {@const lastLogEntry = log[log.length - 1]}
+                    {#if log.length === 1}
+                      <div class="persisted-activity">
+                        <div class="activity-summary-static">{lastLogEntry.text}</div>
+                      </div>
+                    {:else}
+                      <details
+                        class="persisted-activity"
+                        open={isLastAssistant && activityExpanded ? true : undefined}
+                        ontoggle={(e) => { if (isLastAssistant) activityExpanded = e.currentTarget.open; updateSpacer(); }}
+                      >
+                        <summary>
+                          {lastLogEntry.text}
+                          <span class="activity-chevron-icon">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                              <path d="M6 9l6 6 6-6" />
+                            </svg>
+                          </span>
+                        </summary>
+                        <div class="activity-log">
+                          {#each log as entry}
+                            <div class="activity-log-entry" class:nested={entry.nested}>
+                              {entry.text}
+                            </div>
+                          {/each}
+                        </div>
+                      </details>
+                    {/if}
+                  {/if}
                     <div class="message-role">{msg.role === 'user' ? 'You' : 'Assistant'}</div>
                     <div class="message-text">{@html renderMessageText(msg.text)}</div>
                   {#each msg.imageIds as imgId}
@@ -729,39 +757,46 @@
                 </div>
               {/if}
 
-              <!-- Streaming response -->
-              {#if turn.isRunning && turn.streamingText}
+              <!-- Live assistant message (activity log + streaming text in one block) -->
+              {#if turn.isRunning && (turn.activityLog.length > 0 || turn.streamingText)}
                 <div class="message assistant">
-                  <div class="message-role">Assistant</div>
-                  <div class="message-text">{@html renderMessageText(turn.streamingText)}</div>
-                </div>
-              {/if}
-
-              <!-- Turn activity: thinking, tool calls, subagent progress -->
-              {#if turn.isRunning}
-                <div class="turn-activity">
-                  {#if turn.streamingThought}
-                    <div class="activity-thought">
-                      <span class="activity-label">Thinking</span>
-                      <p class="activity-thought-text">{turn.streamingThought}</p>
-                    </div>
-                  {/if}
-                  {#if turn.subagentProgress}
-                    <div class="activity-subagent">
-                      <span class="activity-label">{turn.subagentProgress.agentType}</span>
-                      {#each turn.subagentProgress.steps as step}
-                        <div class="activity-step" class:done={step.done}>
-                          <span class="activity-step-icon">{step.done ? '✓' : '·'}</span>
-                          <span>{step.text}</span>
+                  {#if turn.activityLog.length > 0}
+                    {@const lastEntry = turn.activityLog[turn.activityLog.length - 1]}
+                    {#if turn.activityLog.length === 1}
+                      <div class="persisted-activity">
+                        <div class="activity-summary-static">
+                          <span class="activity-dot"></span>
+                          {lastEntry.text}
                         </div>
-                      {/each}
-                    </div>
+                      </div>
+                    {:else}
+                      <details
+                        class="persisted-activity"
+                        open={activityExpanded || undefined}
+                        ontoggle={(e) => { activityExpanded = e.currentTarget.open; updateSpacer(); }}
+                      >
+                        <summary>
+                          <span class="activity-dot"></span>
+                          {lastEntry.text}
+                          <span class="activity-chevron-icon">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                              <path d="M6 9l6 6 6-6" />
+                            </svg>
+                          </span>
+                        </summary>
+                        <div class="activity-log">
+                          {#each turn.activityLog as entry}
+                            <div class="activity-log-entry" class:nested={entry.nested}>
+                              {entry.text}
+                            </div>
+                          {/each}
+                        </div>
+                      </details>
+                    {/if}
                   {/if}
-                  {#if turn.statusText}
-                    <div class="activity-status">
-                      <span class="activity-dot"></span>
-                      <span>{turn.statusText}</span>
-                    </div>
+                  {#if turn.streamingText}
+                    <div class="message-role">Assistant</div>
+                    <div class="message-text">{@html renderMessageText(turn.streamingText)}</div>
                   {/if}
                 </div>
               {/if}
@@ -1748,68 +1783,67 @@
     line-height: 1;
   }
 
-  /* Turn activity (in chat flow) */
-  .turn-activity {
-    padding: var(--space-4) 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
+  /* Persisted activity log (above assistant messages) */
+  .persisted-activity {
     font-family: var(--font-sans);
     font-size: var(--text-sm);
     color: var(--color-text-tertiary);
+    margin-bottom: var(--space-2);
   }
 
-  .activity-label {
-    font-size: var(--text-xs);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--color-text-tertiary);
-  }
-
-  .activity-thought {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  .activity-thought-text {
-    margin: 0;
-    font-size: var(--text-sm);
-    color: var(--color-text-secondary);
-    font-style: italic;
-    max-height: 4.5em;
-    overflow: hidden;
-    mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
-    -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
-  }
-
-  .activity-subagent {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  .activity-step {
+  .persisted-activity summary {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    color: var(--color-text-tertiary);
+    cursor: pointer;
+    list-style: none;
   }
 
-  .activity-step.done {
+  .persisted-activity summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .persisted-activity summary::marker {
+    display: none;
+    content: '';
+  }
+
+  .persisted-activity summary:hover {
     color: var(--color-text-secondary);
   }
 
-  .activity-step-icon {
-    width: 14px;
-    text-align: center;
-    flex-shrink: 0;
-  }
-
-  .activity-status {
+  .activity-summary-static {
     display: flex;
     align-items: center;
     gap: var(--space-2);
+  }
+
+  .activity-chevron-icon {
+    display: flex;
+    transition: transform 0.15s ease;
+    transform: rotate(-90deg);
+  }
+
+  .persisted-activity[open] .activity-chevron-icon {
+    transform: rotate(0deg);
+  }
+
+
+  .activity-log {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding-top: var(--space-2);
+    padding-left: var(--space-4);
+  }
+
+  .activity-log-entry {
+    color: var(--color-text-tertiary);
+  }
+
+  .activity-log-entry.nested {
+    padding-left: var(--space-4);
+    opacity: 0.75;
   }
 
   .activity-dot {

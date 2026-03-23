@@ -52,6 +52,9 @@ export interface ChatMessage {
    *  The model may not have full context of these messages.
    *  Error-turn messages are deleted when the next turn begins. */
   errorTurn?: boolean;
+  /** Chronological activity log from the turn that produced this message.
+   *  Stored on assistant messages only; purely for UI display. */
+  activityLog?: Array<{ text: string; nested: boolean }>;
   createdAt: number;
 }
 

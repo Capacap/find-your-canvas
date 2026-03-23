@@ -335,6 +335,7 @@ export async function saveTurnResult(
       systemPrompt: string;
       history: Content[];
     }>;
+    activityLog?: Array<{ text: string; nested: boolean }>;
     error?: string;
   },
   /** apiHistory.length before this turn ran. Stored on success for rollback. */
@@ -363,6 +364,7 @@ export async function saveTurnResult(
         text: result.assistantText,
         imageIds: result.assistantImageIds,
         ...(isError ? { errorTurn: true } : {}),
+        ...(result.activityLog?.length ? { activityLog: result.activityLog } : {}),
         createdAt: timestamp + 1 // +1ms ensures assistant sorts after user in createdAt order
       });
     }
