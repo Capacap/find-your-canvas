@@ -56,7 +56,6 @@
   let layoutShifts = $state<Array<{ time: number; value: number; sources: string[] }>>([]);
   let scrollMetrics = $state({ scrollTop: 0, scrollHeight: 0, clientHeight: 0, spacerHeight: 0 });
   let roFireCount = $state(0);
-  let roSkipCount = $state(0);
 
   // Sync API key input with store
   $effect.pre(() => {
@@ -422,6 +421,11 @@
       };
     }
     node.addEventListener('scroll', () => { update(); updateDebugMetrics(); }, { passive: true });
+    // RO handles fade-overlay classes only. updateSpacer() is deliberately
+    // NOT called here: content reflows (details toggle, suggested replies)
+    // change the input area height, which changes clientHeight, which would
+    // trigger spacer recalculation and cause scroll jumps. Spacer updates
+    // come from the $effect (message/streaming changes) and window resize.
     const ro = new ResizeObserver(() => {
       roFireCount++;
       update();
@@ -478,10 +482,13 @@
   }
 
   $effect(() => {
-    // Recalculate spacer when messages change, streaming content grows,
-    // or a pending user message appears. Activity log changes are
-    // excluded — toggling or new entries could interact with the spacer
-    // and cause scroll jumps.
+    // Recalculate spacer when the message list changes, streaming text
+    // grows, or a pending user message appears.
+    //
+    // The ResizeObserver does NOT call updateSpacer() — internal content
+    // reflows (details toggle, suggested reply changes) would cause
+    // scroll jumps via the input-area/clientHeight chain. Window resizes
+    // are handled by a dedicated resize listener.
     app.messages;
     turn.streamingText;
     pendingUserText;
@@ -1094,7 +1101,6 @@
         <span>clientHeight: {scrollMetrics.clientHeight}</span>
         <span>spacer: {scrollMetrics.spacerHeight}</span>
         <span>RO fires: {roFireCount}</span>
-        <span>RO skipped: {roSkipCount}</span>
       </div>
     </div>
 
@@ -1397,7 +1403,7 @@
     position: absolute;
     inset: 0;
     overflow-y: auto;
-    overflow-anchor: none;
+    overflow-anchor: none; /* prevent browser scroll anchoring from fighting with spacer */
     scrollbar-gutter: stable;
     padding: var(--space-8) 0;
   }
