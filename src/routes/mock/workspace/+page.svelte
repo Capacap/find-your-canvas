@@ -19,6 +19,7 @@
     toggleFavorite as storeToggleFavorite,
     getImageUrl,
     revokeImageUrls,
+    refreshMessages,
   } from '$lib/stores/appState.svelte';
   import {
     getTurnState,
@@ -28,6 +29,8 @@
     cancelTurn,
     clearTurnError,
     clearDebugLog,
+    simulateTurn,
+    type SimulationStep,
   } from '$lib/stores/turnState.svelte';
 
   const app = getAppState();
@@ -47,6 +50,13 @@
   let chatScrollEl = $state<HTMLElement | null>(null);
   let activityExpanded = $state(false);
   let apiKeyInput = $state('');
+
+  // ── Debug panel state ──
+  let debugPanelOpen = $state(false);
+  let layoutShifts = $state<Array<{ time: number; value: number; sources: string[] }>>([]);
+  let scrollMetrics = $state({ scrollTop: 0, scrollHeight: 0, clientHeight: 0, spacerHeight: 0 });
+  let roFireCount = $state(0);
+  let roSkipCount = $state(0);
 
   // Sync API key input with store
   $effect.pre(() => {
@@ -211,6 +221,29 @@
     await loadProjects();
     if (app.projects.length > 0 && !app.currentProject) {
       await selectProject(app.projects[0].id);
+    }
+
+    // Layout Instability API: detect which elements cause layout shifts.
+    if ('PerformanceObserver' in window) {
+      const po = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries() as (PerformanceEntry & { value: number; sources?: Array<{ node?: Node }> })[]) {
+          const sources = (entry.sources ?? [])
+            .map((s) => {
+              const el = s.node as HTMLElement | null;
+              if (!el) return '(unknown)';
+              const tag = el.tagName?.toLowerCase() ?? '?';
+              const cls = el.className ? `.${String(el.className).split(' ')[0]}` : '';
+              return `${tag}${cls}`;
+            });
+          layoutShifts = [...layoutShifts, {
+            time: Math.round(entry.startTime),
+            value: Math.round(entry.value * 10000) / 10000,
+            sources
+          }];
+          console.warn('[layout-shift]', entry.value.toFixed(4), sources.join(', '));
+        }
+      });
+      po.observe({ type: 'layout-shift', buffered: false });
     }
   });
 
@@ -379,19 +412,32 @@
       parent.classList.toggle('at-bottom', atBottom);
     }
     update();
-    node.addEventListener('scroll', update, { passive: true });
-    // Observe viewport for window/panel resizes only.
-    // Content changes (activity log toggling, streaming) do NOT
-    // recalculate the spacer — that only happens on message changes.
+    // Update debug scroll metrics on scroll.
+    function updateDebugMetrics() {
+      scrollMetrics = {
+        scrollTop: Math.round(node.scrollTop),
+        scrollHeight: node.scrollHeight,
+        clientHeight: node.clientHeight,
+        spacerHeight: spacerEl?.offsetHeight ?? 0
+      };
+    }
+    node.addEventListener('scroll', () => { update(); updateDebugMetrics(); }, { passive: true });
     const ro = new ResizeObserver(() => {
+      roFireCount++;
       update();
-      updateSpacer();
+      updateDebugMetrics();
     });
     ro.observe(node);
+    function onWindowResize() {
+      updateSpacer();
+      updateDebugMetrics();
+    }
+    window.addEventListener('resize', onWindowResize);
     return {
       destroy() {
         node.removeEventListener('scroll', update);
         ro.disconnect();
+        window.removeEventListener('resize', onWindowResize);
         chatScrollEl = null;
       }
     };
@@ -442,6 +488,53 @@
 
     updateSpacer();
   });
+
+  // ── Debug: fake message helpers ──
+
+  let fakeMessageCounter = $state(0);
+
+  async function debugAddMessage(role: 'user' | 'assistant', activityEntries = 0) {
+    if (!app.currentConversation) return;
+    const { db } = await import('$lib/db/database');
+    const log: Array<{ text: string; nested: boolean }> = [];
+    if (role === 'assistant') {
+      if (activityEntries >= 1) log.push({ text: 'Dispatching text-to-image agent', nested: false });
+      if (activityEntries >= 2) log.push({ text: 'Viewing images', nested: true });
+      if (activityEntries >= 3) log.push({ text: 'Generating: test_image', nested: true });
+      if (activityEntries >= 4) log.push({ text: 'Memory updated: art-style', nested: false });
+    }
+    const n = ++fakeMessageCounter;
+    await db.messages.add({
+      id: crypto.randomUUID(),
+      conversationId: app.currentConversation.id,
+      role,
+      text: role === 'user'
+        ? `Debug user message #${n}. This is filler text to simulate a real user message with enough length for layout testing.`
+        : `Debug assistant response #${n}. Here is a longer response with enough text to take up vertical space in the chat column so we can test scroll behavior properly.`,
+      imageIds: [],
+      ...(log.length > 0 ? { activityLog: log } : {}),
+      createdAt: Date.now()
+    });
+    await refreshMessages();
+  }
+
+  /** A scripted turn that exercises all the activity log states. */
+  const debugSimScript: SimulationStep[] = [
+    { type: 'status', text: 'Thinking...', delay: 300 },
+    { type: 'activity', text: 'Dispatching text-to-image agent', delay: 800 },
+    { type: 'subagent_start', agentType: 'text-to-image', delay: 200 },
+    { type: 'activity', text: 'Viewing images', nested: true, delay: 600 },
+    { type: 'activity', text: 'Generating: debug_test_image', nested: true, delay: 800 },
+    { type: 'subagent_end', delay: 500 },
+    { type: 'stream', text: 'Here is the assistant response streaming in. ', delay: 300 },
+    { type: 'stream', text: 'This text arrives incrementally to simulate real streaming behavior. ', delay: 200 },
+    { type: 'stream', text: 'Each chunk triggers the $effect that recalculates the spacer.', delay: 200 },
+  ];
+
+  function debugClearShifts() {
+    layoutShifts = [];
+    roFireCount = 0;
+  }
 </script>
 
 <div class="app">
@@ -673,9 +766,9 @@
                     {:else}
                       <details
                         class="persisted-activity"
-                        open={isLastAssistant && activityExpanded ? true : undefined}
+                        open={isLastAssistant && !turn.isRunning && activityExpanded ? true : undefined}
                         ontoggle={(e) => {
-                          if (isLastAssistant) activityExpanded = e.currentTarget.open;
+                          if (isLastAssistant && !turn.isRunning) activityExpanded = e.currentTarget.open;
                         }}
                       >
                         <summary>
@@ -755,7 +848,7 @@
               {/if}
 
               <!-- Live assistant message (activity log + streaming text in one block) -->
-              {#if turn.isRunning && (turn.activityLog.length > 0 || turn.streamingText)}
+              {#if turn.isRunning}
                 <div class="message assistant">
                   {#if turn.activityLog.length > 0}
                     {@const lastEntry = turn.activityLog[turn.activityLog.length - 1]}
@@ -792,6 +885,13 @@
                         </div>
                       </details>
                     {/if}
+                  {:else if turn.statusText}
+                    <div class="persisted-activity">
+                      <div class="activity-summary-static">
+                        <span class="activity-dot"></span>
+                        {turn.statusText}
+                      </div>
+                    </div>
                   {/if}
                   {#if turn.streamingText}
                     <div class="message-role">Assistant</div>
@@ -972,6 +1072,73 @@
           {/if}
         </div>
       {/if}
+    </div>
+  </div>
+{/if}
+
+<!-- Debug panel: toggle with Ctrl+Shift+D -->
+<svelte:window onkeydown={(e) => { if (e.ctrlKey && e.shiftKey && e.key === 'D') { debugPanelOpen = !debugPanelOpen; e.preventDefault(); }}} />
+
+{#if debugPanelOpen}
+  <div class="debug-panel">
+    <div class="debug-header">
+      <strong>Scroll Debug</strong>
+      <button onclick={() => debugPanelOpen = false}>&times;</button>
+    </div>
+
+    <div class="debug-section">
+      <div class="debug-label">Scroll Metrics</div>
+      <div class="debug-metrics">
+        <span>scrollTop: {scrollMetrics.scrollTop}</span>
+        <span>scrollHeight: {scrollMetrics.scrollHeight}</span>
+        <span>clientHeight: {scrollMetrics.clientHeight}</span>
+        <span>spacer: {scrollMetrics.spacerHeight}</span>
+        <span>RO fires: {roFireCount}</span>
+        <span>RO skipped: {roSkipCount}</span>
+      </div>
+    </div>
+
+    <div class="debug-section">
+      <div class="debug-label">Add Messages</div>
+      <div class="debug-buttons">
+        <button onclick={() => debugAddMessage('user')}>+ User msg</button>
+        <button onclick={() => debugAddMessage('assistant', 0)}>+ Asst (no log)</button>
+        <button onclick={() => debugAddMessage('assistant', 3)}>+ Asst (3 log)</button>
+        <button onclick={() => debugAddMessage('assistant', 4)}>+ Asst (4 log)</button>
+      </div>
+    </div>
+
+    <div class="debug-section">
+      <div class="debug-label">Simulate Turn</div>
+      <div class="debug-buttons">
+        <button onclick={() => simulateTurn(debugSimScript)} disabled={turn.isRunning}>
+          Run fake turn
+        </button>
+        <button onclick={() => cancelTurn()} disabled={!turn.isRunning}>Cancel</button>
+      </div>
+    </div>
+
+    <div class="debug-section">
+      <div class="debug-label">Layout Shifts ({layoutShifts.length})</div>
+      <div class="debug-buttons">
+        <button onclick={debugClearShifts}>Clear</button>
+        <button onclick={() => {
+          const text = layoutShifts.map(s => `${s.time}ms\t${s.value}\t${s.sources.join(', ')}`).join('\n');
+          navigator.clipboard.writeText(text);
+        }}>Copy log</button>
+      </div>
+      <div class="debug-shifts">
+        {#each layoutShifts.slice(-10) as shift}
+          <div class="debug-shift-entry">
+            <span class="debug-shift-time">{shift.time}ms</span>
+            <span class="debug-shift-value">{shift.value}</span>
+            <span class="debug-shift-sources">{shift.sources.join(', ')}</span>
+          </div>
+        {/each}
+        {#if layoutShifts.length === 0}
+          <div class="debug-shift-empty">No shifts detected</div>
+        {/if}
+      </div>
     </div>
   </div>
 {/if}
@@ -1230,6 +1397,7 @@
     position: absolute;
     inset: 0;
     overflow-y: auto;
+    overflow-anchor: none;
     scrollbar-gutter: stable;
     padding: var(--space-8) 0;
   }
@@ -2100,5 +2268,122 @@
 
   .message-image-rendered {
     cursor: pointer;
+  }
+
+  /* ── Debug panel ── */
+
+  .debug-panel {
+    position: fixed;
+    bottom: 12px;
+    right: 12px;
+    width: 340px;
+    max-height: 70vh;
+    overflow-y: auto;
+    background: #1a1816;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 12px;
+    font-family: var(--font-mono, monospace);
+    font-size: 11px;
+    color: #ccc;
+    z-index: 9999;
+  }
+
+  .debug-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    color: var(--color-accent);
+  }
+
+  .debug-header button {
+    background: none;
+    border: none;
+    color: #999;
+    font-size: 16px;
+    cursor: pointer;
+  }
+
+  .debug-section {
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #2a2a2a;
+  }
+
+  .debug-label {
+    color: #999;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    font-size: 9px;
+    letter-spacing: 0.5px;
+  }
+
+  .debug-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
+
+  .debug-metrics span {
+    white-space: nowrap;
+  }
+
+  .debug-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .debug-buttons button {
+    background: #2a2826;
+    border: 1px solid #444;
+    color: #ccc;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: inherit;
+  }
+
+  .debug-buttons button:hover {
+    background: #3a3836;
+  }
+
+  .debug-buttons button:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .debug-shifts {
+    max-height: 120px;
+    overflow-y: auto;
+    margin-top: 4px;
+  }
+
+  .debug-shift-entry {
+    display: flex;
+    gap: 8px;
+    padding: 1px 0;
+    border-bottom: 1px solid #222;
+  }
+
+  .debug-shift-time {
+    color: #888;
+    min-width: 60px;
+  }
+
+  .debug-shift-value {
+    color: #e88;
+    min-width: 50px;
+  }
+
+  .debug-shift-sources {
+    color: #8be;
+  }
+
+  .debug-shift-empty {
+    color: #666;
+    font-style: italic;
   }
 </style>

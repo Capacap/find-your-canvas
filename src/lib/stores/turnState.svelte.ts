@@ -90,6 +90,58 @@ export function cancelTurn(): void {
   }
 }
 
+// ── Fake turn simulation (debug only) ──
+
+export type SimulationStep =
+  | { type: 'activity'; text: string; nested?: boolean; delay: number }
+  | { type: 'stream'; text: string; delay: number }
+  | { type: 'status'; text: string; delay: number }
+  | { type: 'subagent_start'; agentType: string; delay: number }
+  | { type: 'subagent_end'; delay: number };
+
+/**
+ * Simulate a turn by replaying scripted state transitions through the
+ * same reactive pathways as a real turn. No API calls, no DB writes.
+ * Returns a promise that resolves when the simulation completes.
+ */
+export async function simulateTurn(steps: SimulationStep[]): Promise<void> {
+  if (isRunning) return;
+
+  isRunning = true;
+  streamingText = '';
+  streamingThought = '';
+  statusText = 'Thinking...';
+  errorText = '';
+  subagentProgress = null;
+  activityLog = [];
+
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  for (const step of steps) {
+    await sleep(step.delay);
+    if (!isRunning) break; // cancelled
+
+    if (step.type === 'activity') {
+      activityLog = [...activityLog, { text: step.text, nested: step.nested ?? false }];
+    } else if (step.type === 'stream') {
+      streamingText += step.text;
+      statusText = '';
+    } else if (step.type === 'status') {
+      statusText = step.text;
+    } else if (step.type === 'subagent_start') {
+      subagentProgress = { agentType: step.agentType, steps: [] };
+      activityLog = [...activityLog, { text: `Dispatching ${step.agentType} agent`, nested: false }];
+    } else if (step.type === 'subagent_end') {
+      subagentProgress = null;
+    }
+  }
+
+  streamingText = '';
+  statusText = '';
+  isRunning = false;
+  subagentProgress = null;
+}
+
 // ── Turn execution ──
 
 export interface SendOptions {
