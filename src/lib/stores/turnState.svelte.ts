@@ -49,6 +49,8 @@ let isRunning = $state(false);
 /** Brief hold after turn completes: streaming block stays visible while persisted message takes over. */
 let isSettling = $state(false);
 let streamingText = $state('');
+/** Text revealed to the UI in paragraph-sized blocks. Lags behind streamingText. */
+let revealedText = $state('');
 let streamingThought = $state('');
 let statusText = $state('');
 let errorText = $state('');
@@ -59,11 +61,32 @@ let subagentProgress = $state<SubagentProgress | null>(null);
 let activityLog = $state<ActivityEntry[]>([]);
 let abortController: AbortController | null = null;
 
+/**
+ * Advance revealedText to include all complete paragraphs from streamingText.
+ * A paragraph boundary is a double newline. The trailing incomplete paragraph
+ * stays buffered until the next boundary or flushRevealedText().
+ */
+function advanceRevealedText(): void {
+  const lastBoundary = streamingText.lastIndexOf('\n\n');
+  if (lastBoundary === -1) return;
+  // Reveal up to and including the double newline
+  const candidate = streamingText.slice(0, lastBoundary + 2);
+  if (candidate.length > revealedText.length) {
+    revealedText = candidate;
+  }
+}
+
+/** Flush all remaining buffered text to revealedText (call on turn end). */
+function flushRevealedText(): void {
+  revealedText = streamingText;
+}
+
 export function getTurnState() {
   return {
     get isRunning() { return isRunning; },
     get isSettling() { return isSettling; },
     get streamingText() { return streamingText; },
+    get revealedText() { return revealedText; },
     get streamingThought() { return streamingThought; },
     get statusText() { return statusText; },
     get errorText() { return errorText; },
@@ -101,6 +124,8 @@ export function cancelTurn(): void {
  * message can render underneath. Then clear streaming state.
  */
 async function settleTurn(): Promise<void> {
+  // Flush any trailing paragraph that didn't end with \n\n
+  flushRevealedText();
   isRunning = false;
   isSettling = true;
 
@@ -109,6 +134,7 @@ async function settleTurn(): Promise<void> {
   await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
 
   streamingText = '';
+  revealedText = '';
   streamingThought = '';
   activityLog = [];
   subagentProgress = null;
@@ -134,6 +160,7 @@ export async function simulateTurn(steps: SimulationStep[]): Promise<void> {
 
   isRunning = true;
   streamingText = '';
+  revealedText = '';
   streamingThought = '';
   statusText = 'Thinking...';
   errorText = '';
@@ -150,6 +177,7 @@ export async function simulateTurn(steps: SimulationStep[]): Promise<void> {
       activityLog = [...activityLog, { text: step.text, nested: step.nested ?? false }];
     } else if (step.type === 'stream') {
       streamingText += step.text;
+      advanceRevealedText();
       statusText = '';
     } else if (step.type === 'status') {
       statusText = step.text;
@@ -162,6 +190,7 @@ export async function simulateTurn(steps: SimulationStep[]): Promise<void> {
   }
 
   streamingText = '';
+  revealedText = '';
   statusText = '';
   isRunning = false;
   subagentProgress = null;
@@ -172,7 +201,7 @@ export async function simulateTurn(steps: SimulationStep[]): Promise<void> {
 
 /** Canned multi-paragraph responses for simulated turns. */
 const SAMPLE_RESPONSES = [
-  `I've been thinking about the composition you described. The contrast between the warm foreground tones and that cooler background could work really well.\n\nOne approach: start with a loose wash for the sky, letting the pigment granulate naturally. Then build up the foreground elements with more deliberate strokes. The key is leaving enough breathing room between the two zones.\n\nWant me to generate a quick color study to explore this?`,
+  `I've been thinking about the composition you described. The contrast between the warm foreground tones and that cooler background could work really well.\n\nOne approach: start with a loose wash for the sky, letting the pigment granulate naturally. Then build up the foreground elements with more deliberate strokes. The key is leaving enough breathing room between the two zones.\n\nWant me to generate a quick color study to explore this?\n\n<suggested-replies>\n- "Yes, generate a color study"\n- "Let's try a different approach"\n- "Can you show me some reference images first?"\n</suggested-replies>`,
 
   `That's an interesting direction. The reference images you shared have a strong sense of depth, mostly through atmospheric perspective rather than linear perspective.\n\nI'd suggest leaning into that. Keep the foreground elements saturated and high-contrast, then progressively desaturate and lighten as things recede. Even a subtle shift makes a big difference.\n\nI can pull together a few variations if you want to compare approaches side by side.`,
 
@@ -200,6 +229,7 @@ export async function simulateFullTurn(userText: string): Promise<boolean> {
   abortController = new AbortController();
   isRunning = true;
   streamingText = '';
+  revealedText = '';
   streamingThought = '';
   statusText = 'Thinking...';
   errorText = '';
@@ -283,6 +313,7 @@ export async function simulateFullTurn(userText: string): Promise<boolean> {
     for (const chunk of chunks) {
       if (!isRunning) break;
       streamingText += chunk;
+      advanceRevealedText();
       statusText = '';
       await sleep(30 + Math.random() * 60);
     }
@@ -359,6 +390,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
     debugEvents = [...debugEvents, { type: 'debug_turn_boundary' as const, timestamp: Date.now() }];
   }
   streamingText = '';
+  revealedText = '';
   streamingThought = '';
   statusText = 'Thinking...';
   errorText = '';
@@ -425,6 +457,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
 
     if (event.type === 'text_delta') {
       streamingText += event.text;
+      advanceRevealedText();
       statusText = '';
     } else if (event.type === 'thought_delta') {
       streamingThought += event.text;
@@ -511,6 +544,7 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
 
     if (result.error) {
       streamingText = '';
+      revealedText = '';
       streamingThought = '';
       const cancelled = result.error === 'Turn cancelled';
       errorText = cancelled ? 'Turn cancelled.' : `API error: ${result.error}`;

@@ -178,7 +178,10 @@
   }
 
   function stripSuggestedReplies(text: string): string {
-    return text.replace(SUGGESTED_REPLIES_STRIP_RE, '').trimEnd();
+    return text
+      .replace(SUGGESTED_REPLIES_STRIP_RE, '')
+      .replace(/<suggested-replies[\s\S]*$/, '')
+      .trimEnd();
   }
 
   let suggestedReplies = $derived.by(() => {
@@ -494,7 +497,7 @@
     // Skip during settling: the streaming block is being swapped for the
     // persisted message and any spacer recalc would cause a visible jump.
     app.messages;
-    turn.streamingText;
+    turn.revealedText;
     pendingUserText;
 
     if (!turn.isSettling) updateSpacer();
@@ -910,9 +913,9 @@
                       </div>
                     </div>
                   {/if}
-                  {#if turn.streamingText}
+                  {#if turn.revealedText}
                     <div class="message-role">Assistant</div>
-                    <div class="message-text">{@html renderMessageText(turn.streamingText)}</div>
+                    <div class="message-text">{@html renderMessageText(turn.revealedText)}</div>
                   {/if}
                 </div>
               {/if}
