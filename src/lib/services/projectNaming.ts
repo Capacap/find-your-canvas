@@ -32,7 +32,7 @@ const NAMING_SCHEMA = {
 
 // ── State ──
 
-let namingInFlight = false;
+const namingInFlight = new Set<string>();
 
 // ── Helpers ──
 
@@ -74,9 +74,9 @@ export interface NamingOptions {
 export function maybeNameProject(opts: NamingOptions): void {
   const { apiKey, project, messages, hasNewImages, onNamed } = opts;
 
-  // Already initialized or in flight.
+  // Already initialized or in flight for this project.
   if (project.initialized !== false) return;
-  if (namingInFlight) return;
+  if (namingInFlight.has(project.id)) return;
 
   // Trigger: first artifact or N user messages.
   const userMessageCount = messages.filter(m => m.role === 'user' && !isSystemNotice(m.text)).length;
@@ -85,7 +85,7 @@ export function maybeNameProject(opts: NamingOptions): void {
   const context = buildContext(messages);
   if (!context.trim()) return;
 
-  namingInFlight = true;
+  namingInFlight.add(project.id);
 
   generateStructuredJson<{ name: string; description: string }>(
     apiKey,
@@ -103,6 +103,6 @@ export function maybeNameProject(opts: NamingOptions): void {
       // Silent failure. namingInFlight resets so next trigger retries.
     })
     .finally(() => {
-      namingInFlight = false;
+      namingInFlight.delete(project.id);
     });
 }

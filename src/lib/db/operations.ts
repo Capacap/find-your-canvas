@@ -49,7 +49,7 @@ export async function createProject(name: string, description: string = '', init
     id: generateId(),
     name,
     description,
-    initialized: initialized ? undefined : false,
+    initialized: initialized || false,
     createdAt: timestamp,
     updatedAt: timestamp
   };
