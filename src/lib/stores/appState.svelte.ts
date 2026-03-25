@@ -23,6 +23,23 @@ const IMAGE_URL_CACHE_MAX = 200;
 const imageUrlCache = new Map<string, string>();
 const imageUrlInflight = new Map<string, Promise<string | null>>();
 
+// Reactive image state: resolved blob URLs and derived collections.
+// resolvedUrls is the reactive projection of the LRU cache, updated
+// when resolveImageId() fetches a new URL.
+let resolvedUrls = $state<Record<string, string>>({});
+
+let favorites = $derived(new Set(
+  projectImages.filter(img => img.favorite).map(img => img.id)
+));
+
+let imageLabelMap = $derived(
+  new Map(projectImages.map(img => [img.id, img.label]))
+);
+
+let imagesByRecency = $derived(
+  [...projectImages].sort((a, b) => b.createdAt - a.createdAt)
+);
+
 export function getAppState() {
   return {
     get currentProject() { return currentProject; },
@@ -33,7 +50,11 @@ export function getAppState() {
     get conversations() { return conversations; },
     get messages() { return messages; },
     get projectImages() { return projectImages; },
-    get settings() { return settings; }
+    get settings() { return settings; },
+    get resolvedUrls() { return resolvedUrls; },
+    get favorites() { return favorites; },
+    get imageLabelMap() { return imageLabelMap; },
+    get imagesByRecency() { return imagesByRecency; }
   };
 }
 
@@ -52,6 +73,7 @@ export async function loadProjects(): Promise<void> {
 
 export async function selectProject(id: string): Promise<void> {
   revokeImageUrls();
+  resolvedUrls = {};
   currentProject = (await ops.getProject(id)) ?? null;
   currentConversation = null;
   orchestratorSession = null;
@@ -63,11 +85,13 @@ export async function selectProject(id: string): Promise<void> {
     conversations = await ops.listConversations(id);
     projectImages = await ops.listImages(id);
     agentMemories = await ops.listAgentMemories(id);
+    resolveAllImages();
   }
 }
 
 export function deselectProject(): void {
   revokeImageUrls();
+  resolvedUrls = {};
   currentProject = null;
   currentConversation = null;
   orchestratorSession = null;
@@ -99,6 +123,7 @@ export async function selectConversation(id: string): Promise<void> {
   if (currentConversation) {
     messages = await ops.listMessages(id);
     orchestratorSession = await ops.getOrchestratorSession(id);
+    resolveAllImages();
   } else {
     orchestratorSession = null;
     messages = [];
@@ -117,6 +142,7 @@ export async function deleteProject(): Promise<void> {
   if (!currentProject) return;
   const id = currentProject.id;
   revokeImageUrls();
+  resolvedUrls = {};
   currentProject = null;
   currentConversation = null;
   orchestratorSession = null;
@@ -151,6 +177,7 @@ export async function renameConversation(id: string, title: string): Promise<voi
 export async function refreshMessages(): Promise<void> {
   if (currentConversation) {
     messages = await ops.listMessages(currentConversation.id);
+    resolveAllImages();
   }
 }
 
@@ -176,6 +203,7 @@ export async function refreshAgentMemories(): Promise<void> {
 export async function refreshProjectImages(): Promise<void> {
   if (currentProject) {
     projectImages = await ops.listImages(currentProject.id);
+    resolveAllImages();
   }
 }
 
@@ -220,6 +248,24 @@ export async function getImageUrl(imageId: string): Promise<string | null> {
   } finally {
     imageUrlInflight.delete(imageId);
   }
+}
+
+/**
+ * Resolve an image ID to a blob URL and update the reactive resolvedUrls record.
+ * Deduplicates via the existing getImageUrl inflight tracking.
+ */
+export async function resolveImageId(id: string): Promise<void> {
+  if (resolvedUrls[id]) return;
+  const url = await getImageUrl(id);
+  if (url) resolvedUrls = { ...resolvedUrls, [id]: url };
+}
+
+/** Resolve all image IDs referenced in current messages and project images. */
+function resolveAllImages(): void {
+  for (const msg of messages) {
+    for (const imgId of msg.imageIds) resolveImageId(imgId);
+  }
+  for (const img of projectImages) resolveImageId(img.id);
 }
 
 export async function deleteImage(imageId: string): Promise<void> {

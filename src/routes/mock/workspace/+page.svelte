@@ -2,6 +2,10 @@
   import '$lib/styles/tokens.css';
   import { marked } from 'marked';
   import { onMount } from 'svelte';
+  import { trackScroll } from '$lib/actions/trackScroll';
+  import Lightbox from '$lib/components/Lightbox.svelte';
+  import InputArea from '$lib/components/InputArea.svelte';
+  import DebugPanel from '$lib/components/DebugPanel.svelte';
 
   marked.setOptions({ breaks: true, gfm: true });
   import {
@@ -10,16 +14,13 @@
     loadProjects,
     saveSettings,
     selectProject,
-    deselectProject,
     selectConversation,
     createProject,
     createConversation,
     deleteConversation,
     renameConversation,
-    toggleFavorite as storeToggleFavorite,
-    getImageUrl,
-    revokeImageUrls,
-    refreshMessages,
+    toggleFavorite,
+    resolveImageId,
   } from '$lib/stores/appState.svelte';
   import {
     getTurnState,
@@ -29,9 +30,6 @@
     cancelTurn,
     clearTurnError,
     clearDebugLog,
-    simulateTurn,
-    simulateFullTurn,
-    type SimulationStep,
   } from '$lib/stores/turnState.svelte';
 
   const app = getAppState();
@@ -43,7 +41,6 @@
   let activeView = $state<SidebarView>('conversations');
   let canvasView = $state<CanvasView>('chat');
   let sidebarOpen = $state(true);
-  let inputText = $state('');
   let isDragging = $state(false);
   let isRollingBack = $state(false);
   let rollbackImageIds = $state<string[]>([]);
@@ -63,29 +60,7 @@
     apiKeyInput = app.settings?.geminiApiKey ?? '';
   });
 
-  // File attachments (pending upload)
-  type PendingFile = { id: string; file: File; previewUrl: string };
-  let pendingFiles = $state<PendingFile[]>([]);
-  const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
-
-  function addFiles(files: FileList | File[]) {
-    for (const file of files) {
-      if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) continue;
-      pendingFiles = [...pendingFiles, {
-        id: crypto.randomUUID(),
-        file,
-        previewUrl: URL.createObjectURL(file),
-      }];
-    }
-  }
-
-  function removeAttachment(id: string) {
-    const removed = pendingFiles.find(f => f.id === id);
-    if (removed) URL.revokeObjectURL(removed.previewUrl);
-    pendingFiles = pendingFiles.filter(f => f.id !== id);
-  }
-
-  // Drag-drop handlers
+  // Drag-drop handlers (forwarded to InputArea)
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
     isDragging = true;
@@ -99,70 +74,15 @@
   function handleDrop(e: DragEvent) {
     e.preventDefault();
     isDragging = false;
-    if (e.dataTransfer?.files) addFiles(e.dataTransfer.files);
+    if (e.dataTransfer?.files) inputArea.addFiles(e.dataTransfer.files);
   }
-
-  // Resolved image URLs (blob object URLs from IndexedDB)
-  let resolvedImageUrls = $state<Record<string, string>>({});
-  const resolveInflight = new Set<string>();
-
-  async function resolveImageId(id: string) {
-    if (resolveInflight.has(id)) return;
-    resolveInflight.add(id);
-    try {
-      const url = await getImageUrl(id);
-      if (url) resolvedImageUrls = { ...resolvedImageUrls, [id]: url };
-    } finally {
-      resolveInflight.delete(id);
-    }
-  }
-
-  // Resolve images referenced in messages
-  $effect(() => {
-    for (const msg of app.messages) {
-      for (const imgId of msg.imageIds) resolveImageId(imgId);
-    }
-  });
-
-  // Resolve images in the project gallery
-  $effect(() => {
-    for (const img of app.projectImages) resolveImageId(img.id);
-  });
-
-  // Favorite set derived from projectImages
-  let favorites = $derived(new Set(
-    app.projectImages.filter(img => img.favorite).map(img => img.id)
-  ));
-
-  async function toggleFavorite(imageId: string) {
-    await storeToggleFavorite(imageId);
-  }
-
-  // Image label lookup
-  let imageLabelMap = $derived(
-    new Map(app.projectImages.map(img => [img.id, img.label]))
-  );
 
   // Lightbox
   let lightboxImageId = $state<string | null>(null);
-  let lightboxImage = $derived(app.projectImages.find(img => img.id === lightboxImageId));
 
   function openLightbox(imageId: string) {
     lightboxImageId = imageId;
   }
-
-  function closeLightbox() {
-    lightboxImageId = null;
-  }
-
-  function handleLightboxKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') closeLightbox();
-  }
-
-  // Images sorted newest-first for sidebar and gallery
-  let imagesByRecency = $derived(
-    [...app.projectImages].sort((a, b) => b.createdAt - a.createdAt)
-  );
 
   // Suggested replies: parse from last assistant message
   const SUGGESTED_REPLIES_EXTRACT_RE = /<suggested-replies>\s*([\s\S]*?)\s*<\/suggested-replies>/;
@@ -201,16 +121,11 @@
     const withImages = stripped.replace(
       /\[image:([^\]]+)\]/g,
       (_, id) => {
-        const label = imageLabelMap.get(id) ?? id.slice(0, 8);
+        const label = app.imageLabelMap.get(id) ?? id.slice(0, 8);
         return `<span class="image-chip" data-image-id="${id}">${escapeHtml(label)}</span>`;
       }
     );
     return marked.parse(withImages, { async: false }) as string;
-  }
-
-  function handleSuggestedReply(text: string) {
-    inputText = text;
-    handleSend();
   }
 
   function handleMessageClick(e: MouseEvent) {
@@ -250,18 +165,6 @@
     }
   });
 
-  // Project actions
-  async function handleSelectProject(id: string) {
-    resolvedImageUrls = {};
-    revokeImageUrls();
-    await selectProject(id);
-  }
-
-  function handleDeselectProject() {
-    resolvedImageUrls = {};
-    deselectProject();
-  }
-
   // System notice detection (agent-first conversation initiation)
   const AGENT_FIRST_MESSAGE = '<system-notice>The user is starting a new session and wants you to take initiative and get the session rolling. Read project memory if available, review existing images, then recommend an initial topic to discuss. For a new project with no context yet, introduce yourself briefly and ask what the user wants to explore.</system-notice>';
 
@@ -300,9 +203,10 @@
   }
 
   // Send message
-  async function handleSend() {
-    const text = inputText.trim();
-    if (!text && pendingFiles.length === 0) return;
+  let inputArea: InputArea;
+
+  async function handleSend(text: string, files: File[]) {
+    if (!text && files.length === 0) return;
 
     // Auto-create conversation if none selected
     if (!app.currentConversation) {
@@ -317,15 +221,10 @@
       await renameConversation(app.currentConversation.id, text.slice(0, 60));
     }
 
-    const files = pendingFiles.map(f => f.file);
     const reattach = rollbackImageIds;
-    inputText = '';
     rollbackImageIds = [];
-    for (const pf of pendingFiles) URL.revokeObjectURL(pf.previewUrl);
-    pendingFiles = [];
     if (!isSystemNotice(text)) {
       pendingUserText = text;
-      // Double-rAF: first lets Svelte render the DOM, second lets layout complete
       requestAnimationFrame(() => requestAnimationFrame(anchorToUserMessage));
     }
 
@@ -350,7 +249,7 @@
     try {
       const result = await rollbackTurn();
       if (result && !isSystemNotice(result.userText)) {
-        inputText = result.userText;
+        inputArea.setInput(result.userText);
         rollbackImageIds = result.userImageIds;
       }
     } finally {
@@ -365,27 +264,6 @@
   // Settings
   async function handleSaveSettings() {
     await saveSettings({ geminiApiKey: apiKeyInput });
-  }
-
-  // Scroll tracking (shared by chat and sidebar)
-  function trackScroll(node: HTMLElement) {
-    const parent = node.parentElement!;
-    function update() {
-      const atTop = node.scrollTop <= 2;
-      const atBottom = node.scrollHeight - node.scrollTop - node.clientHeight <= 2;
-      parent.classList.toggle('at-top', atTop);
-      parent.classList.toggle('at-bottom', atBottom);
-    }
-    update();
-    node.addEventListener('scroll', update, { passive: true });
-    const ro = new ResizeObserver(update);
-    ro.observe(node);
-    return {
-      destroy() {
-        node.removeEventListener('scroll', update);
-        ro.disconnect();
-      }
-    };
   }
 
   // ── Chat auto-scroll ──
@@ -503,48 +381,6 @@
     if (!turn.isRunning && !turn.isSettling) updateSpacer();
   });
 
-  // ── Debug: fake message helpers ──
-
-  let fakeMessageCounter = $state(0);
-
-  async function debugAddMessage(role: 'user' | 'assistant', activityEntries = 0) {
-    if (!app.currentConversation) return;
-    const { db } = await import('$lib/db/database');
-    const log: Array<{ text: string; nested: boolean }> = [];
-    if (role === 'assistant') {
-      if (activityEntries >= 1) log.push({ text: 'Dispatching text-to-image agent', nested: false });
-      if (activityEntries >= 2) log.push({ text: 'Viewing images', nested: true });
-      if (activityEntries >= 3) log.push({ text: 'Generating: test_image', nested: true });
-      if (activityEntries >= 4) log.push({ text: 'Memory updated: art-style', nested: false });
-    }
-    const n = ++fakeMessageCounter;
-    await db.messages.add({
-      id: crypto.randomUUID(),
-      conversationId: app.currentConversation.id,
-      role,
-      text: role === 'user'
-        ? `Debug user message #${n}. This is filler text to simulate a real user message with enough length for layout testing.`
-        : `Debug assistant response #${n}. Here is a longer response with enough text to take up vertical space in the chat column so we can test scroll behavior properly.`,
-      imageIds: [],
-      ...(log.length > 0 ? { activityLog: log } : {}),
-      createdAt: Date.now()
-    });
-    await refreshMessages();
-  }
-
-  /** A scripted turn that exercises all the activity log states. */
-  const debugSimScript: SimulationStep[] = [
-    { type: 'status', text: 'Thinking...', delay: 300 },
-    { type: 'activity', text: 'Dispatching text-to-image agent', delay: 800 },
-    { type: 'subagent_start', agentType: 'text-to-image', delay: 200 },
-    { type: 'activity', text: 'Viewing images', nested: true, delay: 600 },
-    { type: 'activity', text: 'Generating: debug_test_image', nested: true, delay: 800 },
-    { type: 'subagent_end', delay: 500 },
-    { type: 'stream', text: 'Here is the assistant response streaming in. ', delay: 300 },
-    { type: 'stream', text: 'This text arrives incrementally to simulate real streaming behavior. ', delay: 200 },
-    { type: 'stream', text: 'Each chunk triggers the $effect that recalculates the spacer.', delay: 200 },
-  ];
-
   function debugClearShifts() {
     layoutShifts = [];
     roFireCount = 0;
@@ -639,13 +475,13 @@
       <div class="fade-container">
         <div class="fade-top"></div>
         <div class="sidebar-scroll queue-grid" use:trackScroll>
-          {#each imagesByRecency as img}
+          {#each app.imagesByRecency as img}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div class="queue-item" onclick={() => openLightbox(img.id)}>
               <div class="queue-thumb">
-                {#if resolvedImageUrls[img.id]}
-                  <img src={resolvedImageUrls[img.id]} alt={img.label} />
+                {#if app.resolvedUrls[img.id]}
+                  <img src={app.resolvedUrls[img.id]} alt={img.label} />
                 {:else}
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="1.5">
                     <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -655,11 +491,11 @@
                 {/if}
                 <button
                   class="fav-btn queue-fav"
-                  class:favorited={favorites.has(img.id)}
+                  class:favorited={app.favorites.has(img.id)}
                   onclick={(e) => { e.stopPropagation(); toggleFavorite(img.id); }}
-                  title={favorites.has(img.id) ? 'Remove from favorites' : 'Add to favorites'}
+                  title={app.favorites.has(img.id) ? 'Remove from favorites' : 'Add to favorites'}
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" fill={favorites.has(img.id) ? 'currentColor' : 'none'}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" fill={app.favorites.has(img.id) ? 'currentColor' : 'none'}>
                     <path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.27 5.82 22 7 14.14 2 9.27l6.91-1.01L12 2z" />
                   </svg>
                 </button>
@@ -703,7 +539,7 @@
             <button
               class="sidebar-item"
               class:active={project.id === app.currentProject?.id}
-              onclick={() => handleSelectProject(project.id)}
+              onclick={() => selectProject(project.id)}
             >
               <span class="sidebar-item-name">{project.name}</span>
             </button>
@@ -813,12 +649,12 @@
                     <div class="message-text">{@html renderMessageText(msg.text)}</div>
                   {#each msg.imageIds as imgId}
                     <div class="message-image">
-                      {#if resolvedImageUrls[imgId]}
+                      {#if app.resolvedUrls[imgId]}
                         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
                         <img
                           class="message-image-rendered"
-                          src={resolvedImageUrls[imgId]}
-                          alt={imageLabelMap.get(imgId) ?? 'Image'}
+                          src={app.resolvedUrls[imgId]}
+                          alt={app.imageLabelMap.get(imgId) ?? 'Image'}
                           onclick={() => openLightbox(imgId)}
                           onkeydown={(e) => { if (e.key === 'Enter') openLightbox(imgId); }}
                         />
@@ -829,16 +665,16 @@
                             <circle cx="8.5" cy="8.5" r="1.5" />
                             <path d="M21 15l-5-5L5 21" />
                           </svg>
-                          <span>{imageLabelMap.get(imgId) ?? 'Loading...'}</span>
+                          <span>{app.imageLabelMap.get(imgId) ?? 'Loading...'}</span>
                         </div>
                       {/if}
                       <button
                         class="fav-btn"
-                        class:favorited={favorites.has(imgId)}
+                        class:favorited={app.favorites.has(imgId)}
                         onclick={() => toggleFavorite(imgId)}
-                        title={favorites.has(imgId) ? 'Remove from favorites' : 'Add to favorites'}
+                        title={app.favorites.has(imgId) ? 'Remove from favorites' : 'Add to favorites'}
                       >
-                        <svg width="16" height="16" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" fill={favorites.has(imgId) ? 'currentColor' : 'none'}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" fill={app.favorites.has(imgId) ? 'currentColor' : 'none'}>
                           <path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.27 5.82 22 7 14.14 2 9.27l6.91-1.01L12 2z" />
                         </svg>
                       </button>
@@ -928,89 +764,28 @@
           <div class="fade-bottom"></div>
         </div>
 
-        <div class="input-area">
-          <div class="chat-column">
-            {#if suggestedReplies.length > 0}
-              <div class="suggested-replies">
-                {#each suggestedReplies as reply}
-                  <button class="chip" onclick={() => handleSuggestedReply(reply)}>
-                    <span class="chip-arrow">&#x203a;</span> {reply}
-                  </button>
-                {/each}
-              </div>
-            {/if}
-            {#if turn.errorText}
-              <div class="error-row">
-                <span class="error-text">{turn.errorText}</span>
-                <button class="retry-btn" onclick={handleRetry}>Retry</button>
-              </div>
-            {/if}
-            <div class="input-wrap">
-              <div class="input-scroll">
-                <textarea
-                  class="input"
-                  placeholder="What are you working on?"
-                  bind:value={inputText}
-                  rows="1"
-                  disabled={turn.isRunning}
-                  onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-                ></textarea>
-              </div>
-              {#if turn.isRunning}
-                <button
-                  class="send-btn stop"
-                  onclick={handleCancel}
-                  title="Stop generating"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                    <rect x="4" y="4" width="16" height="16" rx="2" />
-                  </svg>
-                </button>
-              {:else}
-                <button
-                  class="send-btn"
-                  disabled={!inputText.trim() && pendingFiles.length === 0}
-                  onclick={handleSend}
-                  title="Send message"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M5 12h14M12 5l7 7-7 7" />
-                  </svg>
-                </button>
-              {/if}
-              {#if pendingFiles.length > 0}
-                <div class="attachments">
-                  {#each pendingFiles as att}
-                    <div class="attachment">
-                      <div class="attachment-thumb">
-                        <img src={att.previewUrl} alt={att.file.name} />
-                      </div>
-                      <span class="attachment-name">{att.file.name}</span>
-                      <button class="attachment-remove" onclick={() => removeAttachment(att.id)} title="Remove attachment">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                          <path d="M18 6L6 18M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          </div>
-        </div>
+        <InputArea
+          bind:this={inputArea}
+          disabled={turn.isRunning}
+          {suggestedReplies}
+          errorText={turn.errorText}
+          onsend={handleSend}
+          onretry={handleRetry}
+          oncancel={handleCancel}
+        />
 
       {:else if canvasView === 'gallery'}
         <div class="fade-container">
           <div class="fade-top"></div>
           <div class="scroll-content" use:trackScroll>
             <div class="gallery-grid">
-              {#each imagesByRecency as img}
+              {#each app.imagesByRecency as img}
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div class="gallery-item" onclick={() => openLightbox(img.id)}>
                   <div class="gallery-thumb">
-                    {#if resolvedImageUrls[img.id]}
-                      <img src={resolvedImageUrls[img.id]} alt={img.label} />
+                    {#if app.resolvedUrls[img.id]}
+                      <img src={app.resolvedUrls[img.id]} alt={img.label} />
                     {:else}
                       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="1.5">
                         <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -1020,11 +795,11 @@
                     {/if}
                     <button
                       class="fav-btn gallery-fav"
-                      class:favorited={favorites.has(img.id)}
+                      class:favorited={app.favorites.has(img.id)}
                       onclick={(e) => { e.stopPropagation(); toggleFavorite(img.id); }}
-                      title={favorites.has(img.id) ? 'Remove from favorites' : 'Add to favorites'}
+                      title={app.favorites.has(img.id) ? 'Remove from favorites' : 'Add to favorites'}
                     >
-                      <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" fill={favorites.has(img.id) ? 'currentColor' : 'none'}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" fill={app.favorites.has(img.id) ? 'currentColor' : 'none'}>
                         <path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.27 5.82 22 7 14.14 2 9.27l6.91-1.01L12 2z" />
                       </svg>
                     </button>
@@ -1061,111 +836,20 @@
   </div>
 </div>
 
-{#if lightboxImageId && resolvedImageUrls[lightboxImageId]}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="lightbox" onclick={closeLightbox} onkeydown={handleLightboxKeydown}>
-    <button class="lightbox-close" onclick={closeLightbox} title="Close">&times;</button>
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div class="lightbox-body" onclick={(e) => e.stopPropagation()}>
-      <img src={resolvedImageUrls[lightboxImageId]} alt={lightboxImage?.label ?? 'Full size preview'} />
-      {#if lightboxImage}
-        <div class="lightbox-info">
-          <div class="lightbox-title-row">
-            <span class="lightbox-label">{lightboxImage.label}</span>
-            <button
-              class="lightbox-fav"
-              class:favorited={lightboxImage.favorite}
-              onclick={() => toggleFavorite(lightboxImage!.id)}
-              title={lightboxImage.favorite ? 'Remove from favorites' : 'Add to favorites'}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" fill={lightboxImage.favorite ? 'currentColor' : 'none'}>
-                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.27 5.82 22 7 14.14 2 9.27l6.91-1.01L12 2z" />
-              </svg>
-            </button>
-          </div>
-          {#if lightboxImage.generationContext}
-            <details class="lightbox-details">
-              <summary>Prompt</summary>
-              <p class="lightbox-context">{lightboxImage.generationContext}</p>
-            </details>
-          {/if}
-        </div>
-      {/if}
-    </div>
-  </div>
-{/if}
+<Lightbox imageId={lightboxImageId} onclose={() => lightboxImageId = null} />
 
 <!-- Debug panel: toggle with Ctrl+Shift+D -->
 <svelte:window onkeydown={(e) => { if (e.ctrlKey && e.shiftKey && e.key === 'D') { debugPanelOpen = !debugPanelOpen; e.preventDefault(); }}} />
 
 {#if debugPanelOpen}
-  <div class="debug-panel">
-    <div class="debug-header">
-      <strong>Scroll Debug</strong>
-      <button onclick={() => debugPanelOpen = false}>&times;</button>
-    </div>
-
-    <div class="debug-section">
-      <div class="debug-label">Scroll Metrics</div>
-      <div class="debug-metrics">
-        <span>scrollTop: {scrollMetrics.scrollTop}</span>
-        <span>scrollHeight: {scrollMetrics.scrollHeight}</span>
-        <span>clientHeight: {scrollMetrics.clientHeight}</span>
-        <span>spacer: {scrollMetrics.spacerHeight}</span>
-        <span>RO fires: {roFireCount}</span>
-      </div>
-    </div>
-
-    <div class="debug-section">
-      <div class="debug-label">Add Messages</div>
-      <div class="debug-buttons">
-        <button onclick={() => debugAddMessage('user')}>+ User msg</button>
-        <button onclick={() => debugAddMessage('assistant', 0)}>+ Asst (no log)</button>
-        <button onclick={() => debugAddMessage('assistant', 3)}>+ Asst (3 log)</button>
-        <button onclick={() => debugAddMessage('assistant', 4)}>+ Asst (4 log)</button>
-      </div>
-    </div>
-
-    <div class="debug-section">
-      <div class="debug-label">Simulate Turn</div>
-      <div class="debug-buttons">
-        <button onclick={() => simulateTurn(debugSimScript)} disabled={turn.isRunning}>
-          Stream only
-        </button>
-        <button onclick={() => simulateFullTurn(
-          'Can you try a warmer palette for the background? The cool tones feel disconnected from the foreground.',
-          () => requestAnimationFrame(() => requestAnimationFrame(anchorToUserMessage))
-        )} disabled={turn.isRunning}>
-          Full turn
-        </button>
-        <button onclick={() => cancelTurn()} disabled={!turn.isRunning}>Cancel</button>
-      </div>
-    </div>
-
-    <div class="debug-section">
-      <div class="debug-label">Layout Shifts ({layoutShifts.length})</div>
-      <div class="debug-buttons">
-        <button onclick={debugClearShifts}>Clear</button>
-        <button onclick={() => {
-          const text = layoutShifts.map(s => `${s.time}ms\t${s.value}\t${s.sources.join(', ')}`).join('\n');
-          navigator.clipboard.writeText(text);
-        }}>Copy log</button>
-      </div>
-      <div class="debug-shifts">
-        {#each layoutShifts.slice(-10) as shift}
-          <div class="debug-shift-entry">
-            <span class="debug-shift-time">{shift.time}ms</span>
-            <span class="debug-shift-value">{shift.value}</span>
-            <span class="debug-shift-sources">{shift.sources.join(', ')}</span>
-          </div>
-        {/each}
-        {#if layoutShifts.length === 0}
-          <div class="debug-shift-empty">No shifts detected</div>
-        {/if}
-      </div>
-    </div>
-  </div>
+  <DebugPanel
+    {scrollMetrics}
+    {layoutShifts}
+    {roFireCount}
+    onclearshifts={debugClearShifts}
+    onanchor={() => requestAnimationFrame(() => requestAnimationFrame(anchorToUserMessage))}
+    onclose={() => debugPanelOpen = false}
+  />
 {/if}
 
 <style>
@@ -1185,8 +869,7 @@
   }
 
   .scroll-content:hover,
-  .sidebar-scroll:hover,
-  .input-scroll:hover {
+  .sidebar-scroll:hover {
     scrollbar-color: var(--color-border) transparent;
   }
 
@@ -1616,91 +1299,6 @@
 
 
   /* Input */
-  .input-area {
-    padding: var(--space-2) 0 var(--space-4);
-  }
-
-  .input-area .chat-column {
-    gap: var(--space-3);
-  }
-
-  .input-wrap {
-    display: flex;
-    flex-direction: column;
-    padding: var(--space-3) var(--space-4);
-    background: var(--color-surface-1);
-    border-radius: var(--radius-lg);
-    border: 1px solid var(--color-border);
-    transition: border-color var(--transition-fast);
-    position: relative;
-  }
-
-  .input-wrap:focus-within {
-    border-color: var(--color-border-hover);
-  }
-
-
-  .input-scroll {
-    max-height: 200px;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding-right: var(--space-2);
-  }
-
-  .input {
-    width: 100%;
-    padding: var(--space-1) 0;
-    padding-right: var(--space-10);
-    border: none;
-    background: transparent;
-    color: var(--color-text);
-    font-family: var(--font-sans);
-    font-size: var(--text-base);
-    line-height: 1.5;
-    resize: none;
-    outline: none;
-    overflow: hidden;
-    field-sizing: content;
-  }
-
-  .input::placeholder {
-    color: var(--color-text-tertiary);
-  }
-
-  .send-btn {
-    position: absolute;
-    bottom: var(--space-3);
-    right: var(--space-3);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    border: none;
-    border-radius: var(--radius-md);
-    background: var(--color-accent);
-    color: var(--color-bg);
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: background var(--transition-fast), opacity var(--transition-fast);
-  }
-
-  .send-btn:hover {
-    background: var(--color-accent-hover);
-  }
-
-  .send-btn:disabled {
-    opacity: 0.3;
-    cursor: default;
-  }
-
-  .send-btn.stop {
-    background: var(--color-text-tertiary);
-  }
-
-  .send-btn.stop:hover {
-    background: var(--color-text-secondary);
-  }
 
   /* Image grid in sidebar */
   .queue-grid {
@@ -1759,56 +1357,6 @@
     white-space: nowrap;
   }
 
-  /* Attachments */
-  .attachments {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    padding: var(--space-2) 0;
-  }
-
-  .attachment {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2);
-    background: var(--color-surface-2);
-    border-radius: var(--radius-md);
-  }
-
-  .attachment-thumb {
-    width: 28px;
-    height: 28px;
-    border-radius: var(--radius-sm);
-    background: var(--color-surface-3);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
-
-  .attachment-name {
-    font-size: var(--text-xs);
-    color: var(--color-text-secondary);
-  }
-
-  .attachment-remove {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 20px;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--color-text-tertiary);
-    cursor: pointer;
-    transition: color var(--transition-fast);
-  }
-
-  .attachment-remove:hover {
-    color: var(--color-text);
-  }
 
   /* Sidebar action button */
   .sidebar-action {
@@ -1935,43 +1483,6 @@
     border-radius: var(--radius-md);
   }
 
-  .attachment-thumb img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    border-radius: var(--radius-sm);
-  }
-
-  /* Suggested replies */
-  .suggested-replies {
-    display: flex;
-    flex-direction: column;
-    margin-bottom: var(--space-2);
-  }
-
-  .chip {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-2);
-    padding: var(--space-1) 0;
-    border: none;
-    background: transparent;
-    color: var(--color-accent);
-    font-size: var(--text-sm);
-    font-family: var(--font-sans);
-    text-align: left;
-    cursor: pointer;
-    transition: color var(--transition-fast);
-  }
-
-  .chip:hover {
-    color: var(--color-accent-hover);
-  }
-
-  .chip-arrow {
-    font-size: var(--text-lg);
-    line-height: 1;
-  }
 
   /* Persisted activity log (above assistant messages) */
   .persisted-activity {
@@ -2056,36 +1567,6 @@
   }
 
   /* Error, cancel, retry */
-  .error-row {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    padding: var(--space-1) 0;
-  }
-
-  .error-text {
-    font-size: var(--text-sm);
-    color: var(--color-error);
-  }
-
-  .retry-btn {
-    padding: var(--space-1) var(--space-3);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-full);
-    background: transparent;
-    font-size: var(--text-xs);
-    font-family: var(--font-sans);
-    cursor: pointer;
-    transition: color var(--transition-fast), border-color var(--transition-fast);
-    flex-shrink: 0;
-    color: var(--color-accent);
-    border-color: var(--color-accent);
-  }
-
-  .retry-btn:hover {
-    color: var(--color-accent-hover);
-    border-color: var(--color-accent-hover);
-  }
 
   /* Drag-drop overlay */
   .canvas.dragging {
@@ -2184,233 +1665,10 @@
     margin: 0;
   }
 
-  /* Lightbox */
-  .lightbox {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.92);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
-    cursor: pointer;
-  }
-
-  .lightbox-close {
-    position: absolute;
-    top: var(--space-4);
-    right: var(--space-4);
-    background: none;
-    border: none;
-    color: var(--color-text-tertiary);
-    font-size: 2rem;
-    cursor: pointer;
-    line-height: 1;
-    transition: color var(--transition-fast);
-  }
-
-  .lightbox-close:hover {
-    color: var(--color-accent);
-  }
-
-  .lightbox-body {
-    cursor: default;
-    max-width: 90vw;
-    max-height: 90vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-
-  .lightbox-body img {
-    max-width: 90vw;
-    max-height: 80vh;
-    object-fit: contain;
-    border-radius: var(--radius-md);
-  }
-
-  .lightbox-info {
-    margin-top: var(--space-3);
-    max-width: 60ch;
-  }
-
-  .lightbox-title-row {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-2);
-  }
-
-  .lightbox-label {
-    color: var(--color-text);
-    font-size: var(--text-base);
-    font-family: var(--font-sans);
-  }
-
-  .lightbox-details {
-    margin-top: var(--space-2);
-  }
-
-  .lightbox-details summary {
-    font-size: var(--text-xs);
-    color: var(--color-text-tertiary);
-    cursor: pointer;
-    transition: color var(--transition-fast);
-  }
-
-  .lightbox-details summary:hover {
-    color: var(--color-text-secondary);
-  }
-
-  .lightbox-context {
-    color: var(--color-text-tertiary);
-    font-size: var(--text-xs);
-    margin: var(--space-2) 0 0;
-    line-height: 1.6;
-    max-height: 30vh;
-    overflow-y: auto;
-  }
-
-  .lightbox-fav {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border: none;
-    background: transparent;
-    color: var(--color-text-tertiary);
-    cursor: pointer;
-    transition: color var(--transition-fast);
-    flex-shrink: 0;
-  }
-
-  .lightbox-fav:hover {
-    color: var(--color-accent);
-  }
-
-  .lightbox-fav.favorited {
-    color: var(--color-accent);
-  }
-
   .message-image-rendered {
     cursor: pointer;
   }
 
   /* ── Debug panel ── */
 
-  .debug-panel {
-    position: fixed;
-    bottom: 12px;
-    right: 12px;
-    width: 340px;
-    max-height: 70vh;
-    overflow-y: auto;
-    background: #1a1816;
-    border: 1px solid #333;
-    border-radius: 8px;
-    padding: 12px;
-    font-family: var(--font-mono, monospace);
-    font-size: 11px;
-    color: #ccc;
-    z-index: 9999;
-  }
-
-  .debug-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-    color: var(--color-accent);
-  }
-
-  .debug-header button {
-    background: none;
-    border: none;
-    color: #999;
-    font-size: 16px;
-    cursor: pointer;
-  }
-
-  .debug-section {
-    margin-bottom: 10px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid #2a2a2a;
-  }
-
-  .debug-label {
-    color: #999;
-    margin-bottom: 4px;
-    text-transform: uppercase;
-    font-size: 9px;
-    letter-spacing: 0.5px;
-  }
-
-  .debug-metrics {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 12px;
-  }
-
-  .debug-metrics span {
-    white-space: nowrap;
-  }
-
-  .debug-buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-
-  .debug-buttons button {
-    background: #2a2826;
-    border: 1px solid #444;
-    color: #ccc;
-    padding: 3px 8px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 11px;
-    font-family: inherit;
-  }
-
-  .debug-buttons button:hover {
-    background: #3a3836;
-  }
-
-  .debug-buttons button:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-
-  .debug-shifts {
-    max-height: 120px;
-    overflow-y: auto;
-    margin-top: 4px;
-  }
-
-  .debug-shift-entry {
-    display: flex;
-    gap: 8px;
-    padding: 1px 0;
-    border-bottom: 1px solid #222;
-  }
-
-  .debug-shift-time {
-    color: #888;
-    min-width: 60px;
-  }
-
-  .debug-shift-value {
-    color: #e88;
-    min-width: 50px;
-  }
-
-  .debug-shift-sources {
-    color: #8be;
-  }
-
-  .debug-shift-empty {
-    color: #666;
-    font-style: italic;
-  }
 </style>
