@@ -97,8 +97,8 @@ export function cancelTurn(): void {
 
 /**
  * Settle the streaming block: mark isRunning false but keep the streaming
- * content visible (via isSettling) for one frame so the persisted message
- * can render underneath. Then clear streaming state.
+ * content visible (via isSettling) for two animation frames so the persisted
+ * message can render underneath. Then clear streaming state.
  */
 async function settleTurn(): Promise<void> {
   isRunning = false;
@@ -289,7 +289,7 @@ export async function simulateFullTurn(userText: string): Promise<boolean> {
 
     if (!isRunning) return false;
 
-    // 4. Persist assistant message.
+    // 5. Persist assistant message.
     const assistantTimestamp = Date.now();
     const finalActivityLog = activityLog.length > 0
       ? activityLog.map(e => ({ text: e.text, nested: e.nested }))
@@ -307,7 +307,7 @@ export async function simulateFullTurn(userText: string): Promise<boolean> {
     await db.conversations.update(conversationId, { updatedAt: assistantTimestamp });
     await db.projects.update(projectId, { updatedAt: assistantTimestamp });
 
-    // 5. Refresh UI state, then settle the streaming block.
+    // 6. Refresh UI state, then settle the streaming block.
     if (getAppState().currentConversation?.id === conversationId) {
       await refreshMessages();
     }
@@ -518,8 +518,6 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
         retryInput = opts.text;
         retryImageIds = result.userImageIds;
       }
-      abortController = null;
-      isRunning = false;
     } else {
       retryInput = '';
       retryImageIds = [];
@@ -537,13 +535,15 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
       }
 
       // Settle: keep streaming block visible while persisted message renders.
-      abortController = null;
       await settleTurn();
     }
   } catch (err) {
     errorText = `Error: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
     abortController = null;
-    isRunning = false;
+    // settleTurn() already clears isRunning on the success path;
+    // ensure cleanup on error/cancel paths too.
+    if (isRunning) isRunning = false;
   }
 
   return true;

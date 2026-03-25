@@ -1457,7 +1457,6 @@
   .message.last-assistant:hover {
     outline: 1px solid var(--color-border);
     outline-offset: var(--space-4);
-    border-radius: var(--radius-lg);
   }
 
   .rollback-row {
@@ -2340,7 +2339,6 @@
     font-size: 9px;
     letter-spacing: 0.5px;
   }
-
 
   .debug-metrics {
     display: flex;
