@@ -77,11 +77,20 @@ export function deselectProject(): void {
   agentMemories = [];
 }
 
-export async function createProject(name: string): Promise<Project> {
-  const project = await ops.createProject(name);
+export async function createProject(name: string, initialized = true): Promise<Project> {
+  const project = await ops.createProject(name, '', initialized);
   await loadProjects();
   await selectProject(project.id);
   return project;
+}
+
+/** Rename and mark a project as initialized (used by auto-naming). */
+export async function initializeProject(id: string, name: string, description: string): Promise<void> {
+  await ops.updateProject(id, { name, description, initialized: true });
+  await loadProjects();
+  if (currentProject?.id === id) {
+    currentProject = (await ops.getProject(id)) ?? null;
+  }
 }
 
 export async function selectConversation(id: string): Promise<void> {

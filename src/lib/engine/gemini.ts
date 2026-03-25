@@ -14,6 +14,7 @@ import {
   type FunctionCall,
   type GenerateContentConfig,
   type Part,
+  type Schema,
   type ThinkingConfig
 } from '@google/genai';
 
@@ -188,6 +189,35 @@ export async function generateImage(
     .map((p) => p.text)
     .join('');
   throw new Error('Image model did not return an image. Response text: ' + text);
+}
+
+// ── Structured JSON completion ──
+
+/**
+ * One-shot structured JSON completion. Returns a parsed object
+ * conforming to the provided schema.
+ */
+export async function generateStructuredJson<T>(
+  apiKey: string,
+  modelId: string,
+  prompt: string,
+  schema: Schema,
+  systemInstruction?: string,
+  signal?: AbortSignal
+): Promise<T> {
+  const client = getClient(apiKey);
+  const config: GenerateContentConfig = {
+    responseMimeType: 'application/json',
+    responseSchema: schema,
+    thinkingConfig: { includeThoughts: false }
+  };
+  if (systemInstruction) config.systemInstruction = systemInstruction;
+  if (signal) config.abortSignal = signal;
+
+  const chat: Chat = client.chats.create({ model: modelId, config });
+  const response = await chat.sendMessage({ message: prompt });
+  const text = response.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+  return JSON.parse(text) as T;
 }
 
 // ── Token counting ──

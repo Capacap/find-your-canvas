@@ -8,6 +8,7 @@
  */
 import {
   getAppState,
+  initializeProject,
   refreshMessages,
   refreshProjectImages,
   refreshAgentMemories,
@@ -23,6 +24,7 @@ import {
 } from '$lib/engine/turn';
 import { TEXT_MODEL, IMAGE_MODEL } from '$lib/types/schema';
 import * as ops from '$lib/db/operations';
+import { maybeNameProject } from '$lib/services/projectNaming';
 
 // ── Reactive turn state ──
 
@@ -340,6 +342,18 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
     } else {
       retryInput = '';
       retryImageIds = [];
+
+      // Fire-and-forget: auto-name uninitialized projects.
+      const currentApp = getAppState();
+      if (currentApp.currentProject?.initialized === false) {
+        maybeNameProject({
+          apiKey: ctx.apiKey,
+          project: currentApp.currentProject,
+          messages: currentApp.messages,
+          hasNewImages: result.assistantImageIds.length > 0,
+          onNamed: (name, description) => initializeProject(projectId, name, description)
+        });
+      }
     }
   } catch (err) {
     errorText = `Error: ${err instanceof Error ? err.message : String(err)}`;

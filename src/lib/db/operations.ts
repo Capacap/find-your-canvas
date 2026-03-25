@@ -43,12 +43,13 @@ export async function updateSettings(patch: Partial<Omit<Settings, 'id'>>): Prom
 
 // ── Projects ──
 
-export async function createProject(name: string, description: string = ''): Promise<Project> {
+export async function createProject(name: string, description: string = '', initialized = true): Promise<Project> {
   const timestamp = now();
   const project: Project = {
     id: generateId(),
     name,
     description,
+    initialized: initialized ? undefined : false,
     createdAt: timestamp,
     updatedAt: timestamp
   };
@@ -66,7 +67,7 @@ export async function listProjects(): Promise<Project[]> {
 
 export async function updateProject(
   id: string,
-  patch: Partial<Pick<Project, 'name' | 'description'>>
+  patch: Partial<Pick<Project, 'name' | 'description' | 'initialized'>>
 ): Promise<void> {
   await db.projects.update(id, { ...patch, updatedAt: now() });
 }

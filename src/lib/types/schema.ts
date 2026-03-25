@@ -17,6 +17,8 @@ export interface Project {
   id: string;
   name: string;
   description: string;
+  /** false = pending auto-name, true/undefined = named. */
+  initialized?: boolean;
   createdAt: number;
   updatedAt: number;
 }

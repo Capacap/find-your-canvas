@@ -268,7 +268,7 @@
 
   async function handleAgentFirst() {
     if (!app.currentProject) {
-      await createProject('Untitled project');
+      await createProject('Untitled project', false);
     }
     if (!app.currentConversation) {
       await createConversation('New conversation');
@@ -303,7 +303,7 @@
     // Auto-create conversation if none selected
     if (!app.currentConversation) {
       if (!app.currentProject) {
-        await createProject('Untitled project');
+        await createProject('Untitled project', false);
       }
       await createConversation(text.slice(0, 60) || 'New conversation');
     }
