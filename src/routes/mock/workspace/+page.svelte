@@ -30,6 +30,7 @@
     clearTurnError,
     clearDebugLog,
     simulateTurn,
+    simulateFullTurn,
     type SimulationStep,
   } from '$lib/stores/turnState.svelte';
 
@@ -489,11 +490,14 @@
     // reflows (details toggle, suggested reply changes) would cause
     // scroll jumps via the input-area/clientHeight chain. Window resizes
     // are handled by a dedicated resize listener.
+    //
+    // Skip during settling: the streaming block is being swapped for the
+    // persisted message and any spacer recalc would cause a visible jump.
     app.messages;
     turn.streamingText;
     pendingUserText;
 
-    updateSpacer();
+    if (!turn.isSettling) updateSpacer();
   });
 
   // ── Debug: fake message helpers ──
@@ -759,7 +763,9 @@
               {/if}
               {#each app.messages as msg, i}
                 {@const isLastAssistant = msg.role === 'assistant' && !app.messages.slice(i + 1).some((m: { role: string }) => m.role === 'assistant')}
-                {#if msg.role === 'user' && isSystemNotice(msg.text)}
+                {#if isLastAssistant && turn.isSettling}
+                  <!-- hidden during settle: streaming block still covers this message -->
+                {:else if msg.role === 'user' && isSystemNotice(msg.text)}
                   <!-- hidden: agent-first initiation message -->
                 {:else}
                 <div class="message" class:user={msg.role === 'user'} class:assistant={msg.role === 'assistant'} class:last-assistant={isLastAssistant}>
@@ -768,7 +774,10 @@
                     {@const lastLogEntry = log[log.length - 1]}
                     {#if log.length === 1}
                       <div class="persisted-activity">
-                        <div class="activity-summary-static">{lastLogEntry.text}</div>
+                        <div class="activity-summary-static">
+                          <span class="activity-dot static"></span>
+                          {lastLogEntry.text}
+                        </div>
                       </div>
                     {:else}
                       <details
@@ -779,6 +788,7 @@
                         }}
                       >
                         <summary>
+                          <span class="activity-dot static"></span>
                           {lastLogEntry.text}
                           <span class="activity-chevron-icon">
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -855,7 +865,7 @@
               {/if}
 
               <!-- Live assistant message (activity log + streaming text in one block) -->
-              {#if turn.isRunning}
+              {#if turn.isRunning || turn.isSettling}
                 <div class="message assistant">
                   {#if turn.activityLog.length > 0}
                     {@const lastEntry = turn.activityLog[turn.activityLog.length - 1]}
@@ -1118,7 +1128,10 @@
       <div class="debug-label">Simulate Turn</div>
       <div class="debug-buttons">
         <button onclick={() => simulateTurn(debugSimScript)} disabled={turn.isRunning}>
-          Run fake turn
+          Stream only
+        </button>
+        <button onclick={() => simulateFullTurn('Can you try a warmer palette for the background? The cool tones feel disconnected from the foreground.')} disabled={turn.isRunning}>
+          Full turn
         </button>
         <button onclick={() => cancelTurn()} disabled={!turn.isRunning}>Cancel</button>
       </div>
@@ -1439,14 +1452,12 @@
 
   .message.last-assistant {
     position: relative;
-    padding: var(--space-4);
-    margin: calc(-1 * var(--space-4));
-    border-radius: var(--radius-lg);
-    border: 1px solid transparent;
   }
 
   .message.last-assistant:hover {
-    border-color: var(--color-border);
+    outline: 1px solid var(--color-border);
+    outline-offset: var(--space-4);
+    border-radius: var(--radius-lg);
   }
 
   .rollback-row {
@@ -2029,6 +2040,11 @@
     flex-shrink: 0;
   }
 
+  .activity-dot.static {
+    animation: none;
+    opacity: 0.4;
+  }
+
   @keyframes pulse {
     0%, 100% { opacity: 0.4; }
     50% { opacity: 1; }
@@ -2324,6 +2340,7 @@
     font-size: 9px;
     letter-spacing: 0.5px;
   }
+
 
   .debug-metrics {
     display: flex;

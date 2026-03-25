@@ -46,6 +46,8 @@ export interface ActivityEntry {
 }
 
 let isRunning = $state(false);
+/** Brief hold after turn completes: streaming block stays visible while persisted message takes over. */
+let isSettling = $state(false);
 let streamingText = $state('');
 let streamingThought = $state('');
 let statusText = $state('');
@@ -60,6 +62,7 @@ let abortController: AbortController | null = null;
 export function getTurnState() {
   return {
     get isRunning() { return isRunning; },
+    get isSettling() { return isSettling; },
     get streamingText() { return streamingText; },
     get streamingThought() { return streamingThought; },
     get statusText() { return statusText; },
@@ -90,6 +93,26 @@ export function cancelTurn(): void {
     abortController.abort();
     abortController = null;
   }
+}
+
+/**
+ * Settle the streaming block: mark isRunning false but keep the streaming
+ * content visible (via isSettling) for one frame so the persisted message
+ * can render underneath. Then clear streaming state.
+ */
+async function settleTurn(): Promise<void> {
+  isRunning = false;
+  isSettling = true;
+
+  // Two rAFs: first lets Svelte render the persisted message into the DOM,
+  // second lets layout complete so the transition is invisible.
+  await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+
+  streamingText = '';
+  streamingThought = '';
+  activityLog = [];
+  subagentProgress = null;
+  isSettling = false;
 }
 
 // ── Fake turn simulation (debug only) ──
@@ -142,6 +165,162 @@ export async function simulateTurn(steps: SimulationStep[]): Promise<void> {
   statusText = '';
   isRunning = false;
   subagentProgress = null;
+}
+
+// ── Full turn simulation (debug only) ──
+// Exercises the complete user → streaming → persist → refresh lifecycle.
+
+/** Canned multi-paragraph responses for simulated turns. */
+const SAMPLE_RESPONSES = [
+  `I've been thinking about the composition you described. The contrast between the warm foreground tones and that cooler background could work really well.\n\nOne approach: start with a loose wash for the sky, letting the pigment granulate naturally. Then build up the foreground elements with more deliberate strokes. The key is leaving enough breathing room between the two zones.\n\nWant me to generate a quick color study to explore this?`,
+
+  `That's an interesting direction. The reference images you shared have a strong sense of depth, mostly through atmospheric perspective rather than linear perspective.\n\nI'd suggest leaning into that. Keep the foreground elements saturated and high-contrast, then progressively desaturate and lighten as things recede. Even a subtle shift makes a big difference.\n\nI can pull together a few variations if you want to compare approaches side by side.`,
+
+  `Looking at the previous iterations, I think the main thing holding the piece back is the value structure. The darks aren't dark enough in the midground, which flattens the whole image.\n\nHere's what I'd try:\n\n- Push the shadow values in the central area down by about 20%\n- Add a rim light on the main subject to separate it from the background\n- Warm up the highlights slightly to unify the light source\n\nThese are relatively small moves but they should add a lot of dimension.`,
+
+  `The texture work in your last piece was really strong. Those dry brush passages in the lower third create a nice visual rhythm.\n\nFor this next one, I think we should carry that energy into the upper portion too. Right now there's a disconnect between the loose, expressive bottom half and the smoother rendering up top. Bridging that gap would make the whole thing feel more cohesive.\n\nLet me sketch out a rough plan for the mark-making strategy across the full canvas.`,
+];
+
+let sampleResponseIndex = 0;
+
+/**
+ * Simulate a complete user+assistant turn. Persists the user message,
+ * streams a canned assistant response with realistic timing, then
+ * persists the assistant message and refreshes the UI. Exercises the
+ * same DB + reactive pathways as a real turn.
+ */
+export async function simulateFullTurn(userText: string): Promise<boolean> {
+  const app = getAppState();
+  if (isRunning) return false;
+  if (!app.currentProject || !app.currentConversation) return false;
+
+  const projectId = app.currentProject.id;
+  const conversationId = app.currentConversation.id;
+
+  abortController = new AbortController();
+  isRunning = true;
+  streamingText = '';
+  streamingThought = '';
+  statusText = 'Thinking...';
+  errorText = '';
+  subagentProgress = null;
+  activityLog = [];
+
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  // Pick the next canned response and advance the index.
+  const fullResponse = SAMPLE_RESPONSES[sampleResponseIndex % SAMPLE_RESPONSES.length];
+  sampleResponseIndex++;
+
+  // Simulate realistic streaming: split into small chunks.
+  const words = fullResponse.split(/(?<=\s)/); // split keeping whitespace attached
+  const chunks: string[] = [];
+  let buf = '';
+  for (const w of words) {
+    buf += w;
+    // Flush every ~3-6 words for a natural cadence.
+    if (buf.split(/\s+/).filter(Boolean).length >= 3 + Math.floor(Math.random() * 4)) {
+      chunks.push(buf);
+      buf = '';
+    }
+  }
+  if (buf) chunks.push(buf);
+
+  try {
+    // 1. Persist user message immediately.
+    const { db } = await import('$lib/db/database');
+    const timestamp = Date.now();
+    await db.messages.add({
+      id: crypto.randomUUID(),
+      conversationId,
+      role: 'user' as const,
+      text: userText,
+      imageIds: [],
+      createdAt: timestamp
+    });
+    await refreshMessages();
+
+    // 2. Thinking pause.
+    await sleep(600 + Math.random() * 400);
+    if (!isRunning) return false;
+
+    // 3. Simulate activity log (tool use, subagent dispatch, etc.)
+    activityLog = [...activityLog, { text: 'Viewing images', nested: false }];
+    statusText = 'Viewing 3 image(s)...';
+    await sleep(400 + Math.random() * 300);
+    if (!isRunning) return false;
+
+    activityLog = [...activityLog, { text: 'Dispatching text-to-image agent', nested: false }];
+    subagentProgress = { agentType: 'text-to-image', steps: [] };
+    statusText = '';
+    await sleep(300 + Math.random() * 200);
+    if (!isRunning) return false;
+
+    subagentProgress = {
+      ...subagentProgress!,
+      steps: [{ text: 'Generating: color_study_v2', done: false }]
+    };
+    activityLog = [...activityLog, { text: 'Generating: color_study_v2', nested: true }];
+    statusText = 'Generating: color_study_v2...';
+    await sleep(800 + Math.random() * 400);
+    if (!isRunning) return false;
+
+    subagentProgress = {
+      ...subagentProgress!,
+      steps: [{ text: 'Generated: color_study_v2', done: true }]
+    };
+    statusText = 'Generated: color_study_v2';
+    await sleep(300);
+    if (!isRunning) return false;
+
+    subagentProgress = null;
+    activityLog = [...activityLog, { text: 'Memory updated: palette-notes', nested: false }];
+    statusText = '';
+    await sleep(200);
+    if (!isRunning) return false;
+
+    // 4. Stream the response.
+    for (const chunk of chunks) {
+      if (!isRunning) break;
+      streamingText += chunk;
+      statusText = '';
+      await sleep(30 + Math.random() * 60);
+    }
+
+    if (!isRunning) return false;
+
+    // 4. Persist assistant message.
+    const assistantTimestamp = Date.now();
+    const finalActivityLog = activityLog.length > 0
+      ? activityLog.map(e => ({ text: e.text, nested: e.nested }))
+      : undefined;
+
+    await db.messages.add({
+      id: crypto.randomUUID(),
+      conversationId,
+      role: 'assistant' as const,
+      text: streamingText,
+      imageIds: [],
+      ...(finalActivityLog ? { activityLog: finalActivityLog } : {}),
+      createdAt: assistantTimestamp
+    });
+    await db.conversations.update(conversationId, { updatedAt: assistantTimestamp });
+    await db.projects.update(projectId, { updatedAt: assistantTimestamp });
+
+    // 5. Refresh UI state, then settle the streaming block.
+    if (getAppState().currentConversation?.id === conversationId) {
+      await refreshMessages();
+    }
+
+    abortController = null;
+    await settleTurn();
+  } catch (err) {
+    errorText = `Simulation error: ${err instanceof Error ? err.message : String(err)}`;
+    abortController = null;
+    isRunning = false;
+  }
+
+  return true;
 }
 
 // ── Turn execution ──
@@ -329,16 +508,18 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
       await refreshMessages();
       await refreshProjectImages();
     }
-    streamingText = '';
-    streamingThought = '';
 
     if (result.error) {
+      streamingText = '';
+      streamingThought = '';
       const cancelled = result.error === 'Turn cancelled';
       errorText = cancelled ? 'Turn cancelled.' : `API error: ${result.error}`;
       if (!cancelled) {
         retryInput = opts.text;
         retryImageIds = result.userImageIds;
       }
+      abortController = null;
+      isRunning = false;
     } else {
       retryInput = '';
       retryImageIds = [];
@@ -354,10 +535,13 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
           onNamed: (name, description) => initializeProject(projectId, name, description)
         });
       }
+
+      // Settle: keep streaming block visible while persisted message renders.
+      abortController = null;
+      await settleTurn();
     }
   } catch (err) {
     errorText = `Error: ${err instanceof Error ? err.message : String(err)}`;
-  } finally {
     abortController = null;
     isRunning = false;
   }
