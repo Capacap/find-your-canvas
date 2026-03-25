@@ -123,12 +123,22 @@ export function cancelTurn(): void {
  * content visible (via isSettling) for two animation frames so the persisted
  * message can render underneath. Then clear streaming state.
  */
-async function settleTurn(): Promise<void> {
-  // Flush any trailing paragraph that didn't end with \n\n
+/**
+ * Begin the settle phase. Call BEFORE refreshMessages() so the spacer
+ * $effect skips recalculation while both the streaming block and the
+ * persisted message coexist in the DOM.
+ */
+function beginSettle(): void {
   flushRevealedText();
   isRunning = false;
   isSettling = true;
+}
 
+/**
+ * Finish settling: wait for layout, then clear streaming state.
+ * The streaming block stays visible (via isSettling) until this completes.
+ */
+async function finishSettle(): Promise<void> {
   // Two rAFs: first lets Svelte render the persisted message into the DOM,
   // second lets layout complete so the transition is invisible.
   await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
@@ -218,7 +228,7 @@ let sampleResponseIndex = 0;
  * persists the assistant message and refreshes the UI. Exercises the
  * same DB + reactive pathways as a real turn.
  */
-export async function simulateFullTurn(userText: string): Promise<boolean> {
+export async function simulateFullTurn(userText: string, onUserMessagePersisted?: () => void): Promise<boolean> {
   const app = getAppState();
   if (isRunning) return false;
   if (!app.currentProject || !app.currentConversation) return false;
@@ -269,6 +279,7 @@ export async function simulateFullTurn(userText: string): Promise<boolean> {
       createdAt: timestamp
     });
     await refreshMessages();
+    onUserMessagePersisted?.();
 
     // 2. Thinking pause.
     await sleep(600 + Math.random() * 400);
@@ -338,13 +349,16 @@ export async function simulateFullTurn(userText: string): Promise<boolean> {
     await db.conversations.update(conversationId, { updatedAt: assistantTimestamp });
     await db.projects.update(projectId, { updatedAt: assistantTimestamp });
 
-    // 6. Refresh UI state, then settle the streaming block.
+    // 6. Begin settle before refresh so the spacer $effect skips
+    //    recalculation while both streaming and persisted DOM coexist.
+    beginSettle();
+    abortController = null;
+
     if (getAppState().currentConversation?.id === conversationId) {
       await refreshMessages();
     }
 
-    abortController = null;
-    await settleTurn();
+    await finishSettle();
   } catch (err) {
     errorText = `Simulation error: ${err instanceof Error ? err.message : String(err)}`;
     abortController = null;
@@ -534,14 +548,6 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
       activityLog: activityLog.length > 0 ? $state.snapshot(activityLog) : undefined
     }, preTurnHistoryLength);
 
-    // Only refresh UI state if the user hasn't navigated away during the turn.
-    if (getAppState().currentConversation?.id === conversationId) {
-      await refreshConversation();
-      await refreshOrchestratorSession();
-      await refreshMessages();
-      await refreshProjectImages();
-    }
-
     if (result.error) {
       streamingText = '';
       revealedText = '';
@@ -552,9 +558,27 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
         retryInput = opts.text;
         retryImageIds = result.userImageIds;
       }
+      // Still refresh so persisted messages are up to date.
+      if (getAppState().currentConversation?.id === conversationId) {
+        await refreshConversation();
+        await refreshOrchestratorSession();
+        await refreshMessages();
+        await refreshProjectImages();
+      }
     } else {
       retryInput = '';
       retryImageIds = [];
+
+      // Begin settle before refresh so the spacer $effect skips
+      // recalculation while both streaming and persisted DOM coexist.
+      beginSettle();
+
+      if (getAppState().currentConversation?.id === conversationId) {
+        await refreshConversation();
+        await refreshOrchestratorSession();
+        await refreshMessages();
+        await refreshProjectImages();
+      }
 
       // Fire-and-forget: auto-name uninitialized projects.
       const currentApp = getAppState();
@@ -568,14 +592,13 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
         });
       }
 
-      // Settle: keep streaming block visible while persisted message renders.
-      await settleTurn();
+      await finishSettle();
     }
   } catch (err) {
     errorText = `Error: ${err instanceof Error ? err.message : String(err)}`;
   } finally {
     abortController = null;
-    // settleTurn() already clears isRunning on the success path;
+    // beginSettle() already clears isRunning on the success path;
     // ensure cleanup on error/cancel paths too.
     if (isRunning) isRunning = false;
   }

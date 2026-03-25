@@ -477,7 +477,11 @@
 
   function anchorToUserMessage() {
     if (!chatScrollEl) return;
-    const anchor = chatScrollEl.querySelector('[data-turn-anchor]') as HTMLElement | null;
+    // Prefer the optimistic pending-message anchor; fall back to the last persisted user message.
+    const anchor = (
+      chatScrollEl.querySelector('[data-turn-anchor]') ??
+      [...chatScrollEl.querySelectorAll('.message.user')].at(-1)
+    ) as HTMLElement | null;
     if (!anchor) return;
     updateSpacer();
     const topPad = parseFloat(getComputedStyle(chatScrollEl).paddingTop);
@@ -486,21 +490,17 @@
   }
 
   $effect(() => {
-    // Recalculate spacer when the message list changes, streaming text
-    // grows, or a pending user message appears.
+    // Recalculate spacer when the persisted message list changes or a
+    // pending user message appears.
     //
-    // The ResizeObserver does NOT call updateSpacer() — internal content
-    // reflows (details toggle, suggested reply changes) would cause
-    // scroll jumps via the input-area/clientHeight chain. Window resizes
-    // are handled by a dedicated resize listener.
-    //
-    // Skip during settling: the streaming block is being swapped for the
-    // persisted message and any spacer recalc would cause a visible jump.
+    // Skip during a running turn or settling: anchorToUserMessage()
+    // handles scroll positioning at turn start, and the spacer should
+    // not move while content is streaming or during the handoff.
+    // Window resizes are handled by a dedicated resize listener.
     app.messages;
-    turn.revealedText;
     pendingUserText;
 
-    if (!turn.isSettling) updateSpacer();
+    if (!turn.isRunning && !turn.isSettling) updateSpacer();
   });
 
   // ── Debug: fake message helpers ──
@@ -1133,7 +1133,10 @@
         <button onclick={() => simulateTurn(debugSimScript)} disabled={turn.isRunning}>
           Stream only
         </button>
-        <button onclick={() => simulateFullTurn('Can you try a warmer palette for the background? The cool tones feel disconnected from the foreground.')} disabled={turn.isRunning}>
+        <button onclick={() => simulateFullTurn(
+          'Can you try a warmer palette for the background? The cool tones feel disconnected from the foreground.',
+          () => requestAnimationFrame(() => requestAnimationFrame(anchorToUserMessage))
+        )} disabled={turn.isRunning}>
           Full turn
         </button>
         <button onclick={() => cancelTurn()} disabled={!turn.isRunning}>Cancel</button>
