@@ -16,6 +16,7 @@
   --color-accent: #c8a84e;
   --color-accent-hover: #d9bc6a;
   --color-accent-subtle: rgba(200, 168, 78, 0.10);
+  --color-accent-subtle-hover: rgba(200, 168, 78, 0.20);
 
   /* Agent — warm muted */
   --color-agent: #b09070;
@@ -23,7 +24,9 @@
 
   /* Semantic */
   --color-error: #c45;
+  --color-error-hover: #e56;
   --color-success: #6a9a5b;
+  --color-overlay: rgba(13, 11, 9, 0.6);
 
   /* Typography */
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;

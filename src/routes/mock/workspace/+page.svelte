@@ -66,7 +66,7 @@
   let confirmDeleteImageId = $state<string | null>(null);
   let galleryMenuImageId = $state<string | null>(null);
 
-  let filteredGalleryImages = $derived(() => {
+  let filteredGalleryImages = $derived.by(() => {
     const images = app.imagesByRecency;
     if (!gallerySearch.trim()) return images;
     const q = gallerySearch.toLowerCase();
@@ -131,7 +131,27 @@
     await deleteAgentMemory(id);
   }
 
+  function clearEditingState() {
+    renamingImageId = null;
+    renamingImageLabel = '';
+    galleryMenuImageId = null;
+    confirmDeleteImageId = null;
+    editingMemoryId = null;
+    editingMemoryTitle = '';
+    editingMemoryContent = '';
+    confirmDeleteMemoryId = null;
+    renamingProjectId = null;
+    renamingProjectName = '';
+    projectMenuId = null;
+    confirmDeleteProjectId = null;
+    renamingConvoId = null;
+    renamingConvoTitle = '';
+    convoMenuId = null;
+    confirmDeleteConvoId = null;
+  }
+
   function handleActivityClick(view: SidebarView) {
+    clearEditingState();
     if (activeView === view) {
       sidebarExpanded = !sidebarExpanded;
     } else {
@@ -1114,7 +1134,7 @@
         <div class="fade-container">
           <div class="fade-top"></div>
           <div class="scroll-content" use:trackScroll>
-            {#if filteredGalleryImages().length === 0}
+            {#if filteredGalleryImages.length === 0}
               <p class="empty-state">
                 {#if gallerySearch.trim()}
                   No images match "{gallerySearch}".
@@ -1128,7 +1148,7 @@
                 class:gallery-small={gallerySize === 'small'}
                 class:gallery-large={gallerySize === 'large'}
               >
-                {#each filteredGalleryImages() as img}
+                {#each filteredGalleryImages as img}
                   <!-- svelte-ignore a11y_click_events_have_key_events -->
                   <!-- svelte-ignore a11y_no_static_element_interactions -->
                   <div class="gallery-item" onclick={() => openLightbox(img.id)}>
@@ -1303,6 +1323,9 @@
     if (galleryMenuImageId && !target.closest('.gallery-menu-anchor')) {
       galleryMenuImageId = null;
       confirmDeleteImageId = null;
+    }
+    if (confirmDeleteMemoryId && !target.closest('.memory-actions')) {
+      confirmDeleteMemoryId = null;
     }
   }}
 />
@@ -1521,11 +1544,11 @@
   }
 
   .context-menu-danger {
-    color: #e55;
+    color: var(--color-error);
   }
 
   .context-menu-danger:hover {
-    color: #f77;
+    color: var(--color-error-hover);
     background: var(--color-surface-1);
   }
 
@@ -1554,11 +1577,11 @@
   }
 
   .confirm-yes {
-    color: #e55;
+    color: var(--color-error);
   }
 
   .confirm-yes:hover {
-    color: #f77;
+    color: var(--color-error-hover);
   }
 
   .confirm-no {
@@ -1772,7 +1795,7 @@
   }
 
   :global(.image-chip:hover) {
-    background: rgba(200, 168, 78, 0.2);
+    background: var(--color-accent-subtle-hover);
   }
 
   .message-image {
@@ -2017,7 +2040,7 @@
     height: 28px;
     border: none;
     border-radius: var(--radius-sm);
-    background: rgba(13, 11, 9, 0.6);
+    background: var(--color-overlay);
     color: var(--color-text-tertiary);
     cursor: pointer;
     transition: color var(--transition-fast);
@@ -2132,7 +2155,7 @@
   }
 
   .memory-delete-btn:hover {
-    color: #e55;
+    color: var(--color-error);
   }
 
   .memory-body {
