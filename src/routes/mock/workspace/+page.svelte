@@ -1273,8 +1273,7 @@
                           {/if}
                         </div>
                       </div>
-                      <div class="memory-summary">{mem.summary}</div>
-                      <div class="memory-body">{mem.content}</div>
+                      <div class="memory-body">{@html marked.parse(mem.content, { async: false })}</div>
                     {/if}
                   </div>
                 {/each}
@@ -2136,17 +2135,44 @@
     color: #e55;
   }
 
-  .memory-summary {
-    font-size: var(--text-sm);
-    color: var(--color-text-tertiary);
-    margin-bottom: var(--space-2);
-  }
-
   .memory-body {
     font-size: var(--text-sm);
     color: var(--color-text-secondary);
     line-height: 1.6;
-    white-space: pre-wrap;
+  }
+
+  .memory-body :global(p) {
+    margin: 0 0 var(--space-2);
+  }
+
+  .memory-body :global(p:last-child) {
+    margin-bottom: 0;
+  }
+
+  .memory-body :global(h1),
+  .memory-body :global(h2),
+  .memory-body :global(h3) {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--color-text);
+    margin: var(--space-3) 0 var(--space-1);
+  }
+
+  .memory-body :global(h1:first-child),
+  .memory-body :global(h2:first-child),
+  .memory-body :global(h3:first-child) {
+    margin-top: 0;
+  }
+
+  .memory-body :global(ul),
+  .memory-body :global(ol) {
+    margin: 0 0 var(--space-2);
+    padding-left: var(--space-4);
+  }
+
+  .memory-body :global(strong) {
+    color: var(--color-text);
+    font-weight: 600;
   }
 
   .memory-edit {
