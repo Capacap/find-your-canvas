@@ -108,6 +108,14 @@ export async function createProject(name: string, initialized = true): Promise<P
   return project;
 }
 
+export async function renameProject(id: string, name: string): Promise<void> {
+  await ops.updateProject(id, { name });
+  await loadProjects();
+  if (currentProject?.id === id) {
+    currentProject = (await ops.getProject(id)) ?? null;
+  }
+}
+
 /** Rename and mark a project as initialized (used by auto-naming). */
 export async function initializeProject(id: string, name: string, description: string): Promise<void> {
   await ops.updateProject(id, { name, description, initialized: true });

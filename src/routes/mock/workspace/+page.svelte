@@ -18,7 +18,11 @@
     createProject,
     createConversation,
     deleteConversation,
+    deleteProject,
+    exportProject,
+    importProject,
     renameConversation,
+    renameProject,
     toggleFavorite,
     resolveImageId,
   } from '$lib/stores/appState.svelte';
@@ -36,7 +40,7 @@
   const turn = getTurnState();
 
   // Local UI state
-  type SidebarView = 'conversations' | 'images' | 'memories' | 'settings';
+  type SidebarView = 'projects' | 'conversations' | 'images' | 'memories' | 'settings';
   type CanvasView = 'chat' | 'gallery' | 'memories';
   let activeView = $state<SidebarView>('conversations');
   let canvasView = $state<CanvasView>('chat');
@@ -183,7 +187,89 @@
     await sendMessage({ text: AGENT_FIRST_MESSAGE, onImageGenerated: (id) => resolveImageId(id) });
   }
 
+  // Project actions
+  let renamingProjectId = $state<string | null>(null);
+  let renamingProjectName = $state('');
+  let confirmDeleteProjectId = $state<string | null>(null);
+  let projectMenuId = $state<string | null>(null);
+
+  async function handleSelectProject(id: string) {
+    if (id === app.currentProject?.id) return;
+    clearTurnError();
+    clearDebugLog();
+    await selectProject(id);
+    if (app.conversations.length > 0) {
+      await selectConversation(app.conversations[0].id);
+    }
+    activeView = 'conversations';
+    canvasView = 'chat';
+  }
+
+  async function handleNewProject() {
+    await createProject('Untitled project', false);
+    await createConversation('New conversation');
+    activeView = 'conversations';
+    canvasView = 'chat';
+  }
+
+  function startRenameProject(id: string, currentName: string) {
+    projectMenuId = null;
+    renamingProjectId = id;
+    renamingProjectName = currentName;
+  }
+
+  async function commitRenameProject() {
+    if (renamingProjectId && renamingProjectName.trim()) {
+      await renameProject(renamingProjectId, renamingProjectName.trim());
+    }
+    renamingProjectId = null;
+  }
+
+  function cancelRenameProject() {
+    renamingProjectId = null;
+  }
+
+  async function handleExportProject(id: string) {
+    projectMenuId = null;
+    if (app.currentProject?.id !== id) {
+      await selectProject(id);
+    }
+    await exportProject();
+  }
+
+  async function handleImportProject() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.zip';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      await importProject(file);
+      activeView = 'conversations';
+      canvasView = 'chat';
+    };
+    input.click();
+  }
+
+  async function handleDeleteProject(id: string) {
+    confirmDeleteProjectId = null;
+    projectMenuId = null;
+    if (app.currentProject?.id !== id) {
+      await selectProject(id);
+    }
+    await deleteProject();
+    if (app.projects.length > 0) {
+      await selectProject(app.projects[0].id);
+      activeView = 'conversations';
+    }
+  }
+
   // Conversation actions
+  let convoMenuId = $state<string | null>(null);
+  let renamingConvoId = $state<string | null>(null);
+  let renamingConvoTitle = $state('');
+  let confirmDeleteConvoId = $state<string | null>(null);
+
   async function handleSelectConversation(id: string) {
     canvasView = 'chat';
     clearDebugLog();
@@ -198,7 +284,26 @@
     canvasView = 'chat';
   }
 
+  function startRenameConvo(id: string, currentTitle: string) {
+    convoMenuId = null;
+    renamingConvoId = id;
+    renamingConvoTitle = currentTitle;
+  }
+
+  async function commitRenameConvo() {
+    if (renamingConvoId && renamingConvoTitle.trim()) {
+      await renameConversation(renamingConvoId, renamingConvoTitle.trim());
+    }
+    renamingConvoId = null;
+  }
+
+  function cancelRenameConvo() {
+    renamingConvoId = null;
+  }
+
   async function handleDeleteConversation(id: string) {
+    confirmDeleteConvoId = null;
+    convoMenuId = null;
     await deleteConversation(id);
   }
 
@@ -395,6 +500,16 @@
         <div class="activity-top">
       <button
         class="activity-btn"
+        class:active={activeView === 'projects'}
+        onclick={() => activeView = 'projects'}
+        title="Projects"
+      >
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+        </svg>
+      </button>
+      <button
+        class="activity-btn"
         class:active={activeView === 'conversations'}
         onclick={() => activeView = 'conversations'}
         title="Conversations"
@@ -442,7 +557,81 @@
 
       <!-- Sidebar: content changes based on active view -->
       <aside class="sidebar">
-        {#if activeView === 'conversations'}
+        {#if activeView === 'projects'}
+      <div class="fade-container">
+        <div class="fade-top"></div>
+        <div class="sidebar-scroll" use:trackScroll>
+          <button class="sidebar-item sidebar-new-chat" onclick={handleNewProject}>
+            <span class="sidebar-item-name">+ New project</span>
+          </button>
+          <button class="sidebar-item sidebar-new-chat" onclick={handleImportProject}>
+            <span class="sidebar-item-name">+ Import project</span>
+          </button>
+          {#each app.projects as project}
+            <div class="sidebar-project-item" class:active={project.id === app.currentProject?.id}>
+              {#if renamingProjectId === project.id}
+                <input
+                  class="sidebar-rename-input"
+                  type="text"
+                  bind:value={renamingProjectName}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter') commitRenameProject();
+                    if (e.key === 'Escape') cancelRenameProject();
+                  }}
+                  onblur={commitRenameProject}
+                  autofocus
+                />
+              {:else}
+                <button
+                  class="sidebar-item"
+                  class:active={project.id === app.currentProject?.id}
+                  onclick={() => handleSelectProject(project.id)}
+                  ondblclick={() => startRenameProject(project.id, project.name)}
+                >
+                  <span class="sidebar-item-name">{project.name}</span>
+                </button>
+                <div class="sidebar-menu-anchor">
+                  <button
+                    class="sidebar-action-btn"
+                    onclick={() => projectMenuId = projectMenuId === project.id ? null : project.id}
+                    title="Project actions"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <circle cx="12" cy="5" r="2" />
+                      <circle cx="12" cy="12" r="2" />
+                      <circle cx="12" cy="19" r="2" />
+                    </svg>
+                  </button>
+                  {#if projectMenuId === project.id}
+                    <div class="project-context-menu">
+                      <button class="context-menu-item" onclick={() => startRenameProject(project.id, project.name)}>
+                        Rename
+                      </button>
+                      <button class="context-menu-item" onclick={() => handleExportProject(project.id)}>
+                        Export
+                      </button>
+                      {#if confirmDeleteProjectId === project.id}
+                        <div class="context-menu-confirm">
+                          <span class="confirm-text">Delete?</span>
+                          <button class="confirm-yes" onclick={() => handleDeleteProject(project.id)}>Yes</button>
+                          <button class="confirm-no" onclick={() => { confirmDeleteProjectId = null; projectMenuId = null; }}>No</button>
+                        </div>
+                      {:else}
+                        <button class="context-menu-item context-menu-danger" onclick={() => confirmDeleteProjectId = project.id}>
+                          Delete
+                        </button>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+        <div class="fade-bottom"></div>
+      </div>
+
+    {:else if activeView === 'conversations'}
       <div class="fade-container">
         <div class="fade-top"></div>
         <div class="sidebar-scroll" use:trackScroll>
@@ -450,13 +639,61 @@
             <span class="sidebar-item-name">+ New chat</span>
           </button>
           {#each app.conversations as convo}
-            <button
-              class="sidebar-item"
-              class:active={convo.id === app.currentConversation?.id}
-              onclick={() => handleSelectConversation(convo.id)}
-            >
-              <span class="sidebar-item-name">{convo.title}</span>
-            </button>
+            <div class="sidebar-project-item" class:active={convo.id === app.currentConversation?.id}>
+              {#if renamingConvoId === convo.id}
+                <input
+                  class="sidebar-rename-input"
+                  type="text"
+                  bind:value={renamingConvoTitle}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter') commitRenameConvo();
+                    if (e.key === 'Escape') cancelRenameConvo();
+                  }}
+                  onblur={commitRenameConvo}
+                  autofocus
+                />
+              {:else}
+                <button
+                  class="sidebar-item"
+                  class:active={convo.id === app.currentConversation?.id}
+                  onclick={() => handleSelectConversation(convo.id)}
+                  ondblclick={() => startRenameConvo(convo.id, convo.title)}
+                >
+                  <span class="sidebar-item-name">{convo.title}</span>
+                </button>
+                <div class="sidebar-menu-anchor">
+                  <button
+                    class="sidebar-action-btn"
+                    onclick={() => convoMenuId = convoMenuId === convo.id ? null : convo.id}
+                    title="Conversation actions"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <circle cx="12" cy="5" r="2" />
+                      <circle cx="12" cy="12" r="2" />
+                      <circle cx="12" cy="19" r="2" />
+                    </svg>
+                  </button>
+                  {#if convoMenuId === convo.id}
+                    <div class="project-context-menu">
+                      <button class="context-menu-item" onclick={() => startRenameConvo(convo.id, convo.title)}>
+                        Rename
+                      </button>
+                      {#if confirmDeleteConvoId === convo.id}
+                        <div class="context-menu-confirm">
+                          <span class="confirm-text">Delete?</span>
+                          <button class="confirm-yes" onclick={() => handleDeleteConversation(convo.id)}>Yes</button>
+                          <button class="confirm-no" onclick={() => { confirmDeleteConvoId = null; convoMenuId = null; }}>No</button>
+                        </div>
+                      {:else}
+                        <button class="context-menu-item context-menu-danger" onclick={() => confirmDeleteConvoId = convo.id}>
+                          Delete
+                        </button>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            </div>
           {/each}
         </div>
         <div class="fade-bottom"></div>
@@ -532,19 +769,6 @@
           />
         </label>
         <button class="settings-save-btn" onclick={handleSaveSettings}>Save</button>
-        {#if app.projects.length > 1}
-          <div class="settings-divider"></div>
-          <span class="settings-label-text">Switch project</span>
-          {#each app.projects as project}
-            <button
-              class="sidebar-item"
-              class:active={project.id === app.currentProject?.id}
-              onclick={() => selectProject(project.id)}
-            >
-              <span class="sidebar-item-name">{project.name}</span>
-            </button>
-          {/each}
-        {/if}
       </div>
         {/if}
       </aside>
@@ -839,7 +1063,20 @@
 <Lightbox imageId={lightboxImageId} onclose={() => lightboxImageId = null} />
 
 <!-- Debug panel: toggle with Ctrl+Shift+D -->
-<svelte:window onkeydown={(e) => { if (e.ctrlKey && e.shiftKey && e.key === 'D') { debugPanelOpen = !debugPanelOpen; e.preventDefault(); }}} />
+<svelte:window
+  onkeydown={(e) => { if (e.ctrlKey && e.shiftKey && e.key === 'D') { debugPanelOpen = !debugPanelOpen; e.preventDefault(); }}}
+  onclick={(e) => {
+    if (projectMenuId || convoMenuId) {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.sidebar-menu-anchor')) {
+        projectMenuId = null;
+        convoMenuId = null;
+        confirmDeleteProjectId = null;
+        confirmDeleteConvoId = null;
+      }
+    }
+  }}
+/>
 
 {#if debugPanelOpen}
   <DebugPanel
@@ -1053,6 +1290,141 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Project sidebar items */
+  .sidebar-project-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .sidebar-project-item > .sidebar-item {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .sidebar-menu-anchor {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .sidebar-action-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-tertiary);
+    cursor: pointer;
+    opacity: 0;
+    transition: color var(--transition-fast), opacity var(--transition-fast);
+  }
+
+  .sidebar-project-item:hover .sidebar-action-btn,
+  .sidebar-action-btn:global(.menu-open) {
+    opacity: 1;
+  }
+
+  .sidebar-action-btn:hover {
+    color: var(--color-text);
+  }
+
+  .project-context-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    min-width: 120px;
+    padding: var(--space-1);
+    background: var(--color-surface-2);
+    border-radius: var(--radius-md);
+    z-index: 20;
+    margin-top: var(--space-1);
+  }
+
+  .context-menu-item {
+    display: block;
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+    font-family: var(--font-sans);
+    text-align: left;
+    cursor: pointer;
+    transition: color var(--transition-fast), background var(--transition-fast);
+  }
+
+  .context-menu-item:hover {
+    color: var(--color-text);
+    background: var(--color-surface-1);
+  }
+
+  .context-menu-danger {
+    color: #e55;
+  }
+
+  .context-menu-danger:hover {
+    color: #f77;
+    background: var(--color-surface-1);
+  }
+
+  .context-menu-confirm {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-3);
+  }
+
+  .confirm-text {
+    font-size: var(--text-xs);
+    color: var(--color-text-tertiary);
+  }
+
+  .confirm-yes,
+  .confirm-no {
+    padding: var(--space-1) var(--space-2);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    font-size: var(--text-xs);
+    font-family: var(--font-sans);
+    cursor: pointer;
+    transition: color var(--transition-fast);
+  }
+
+  .confirm-yes {
+    color: #e55;
+  }
+
+  .confirm-yes:hover {
+    color: #f77;
+  }
+
+  .confirm-no {
+    color: var(--color-text-tertiary);
+  }
+
+  .confirm-no:hover {
+    color: var(--color-text);
+  }
+
+  .sidebar-rename-input {
+    flex: 1;
+    min-width: 0;
+    padding: var(--space-2);
+    border: 1px solid var(--color-border-hover);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-1);
+    color: var(--color-text);
+    font-size: var(--text-base);
+    font-family: var(--font-sans);
+    outline: none;
   }
 
   /* Fade container */
@@ -1627,11 +1999,6 @@
 
   .settings-save-btn:hover {
     background: var(--color-accent-hover);
-  }
-
-  .settings-divider {
-    height: 1px;
-    background: var(--color-border);
   }
 
   .agent-first-prompt {
