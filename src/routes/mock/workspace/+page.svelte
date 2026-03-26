@@ -495,7 +495,6 @@
       parent.classList.toggle('at-bottom', atBottom);
     }
     update();
-    // Update debug scroll metrics on scroll.
     node.addEventListener('scroll', update, { passive: true });
     // RO handles fade-overlay classes only. updateSpacer() is deliberately
     // NOT called here: content reflows (details toggle, suggested replies)
@@ -637,7 +636,7 @@
             <span class="sidebar-item-name">+ Import project</span>
           </button>
           {#each app.projects as project}
-            <div class="sidebar-project-item" class:active={project.id === app.currentProject?.id}>
+            <div class="sidebar-list-item" class:active={project.id === app.currentProject?.id}>
               {#if renamingProjectId === project.id}
                 <input
                   class="sidebar-rename-input"
@@ -672,7 +671,7 @@
                     </svg>
                   </button>
                   {#if projectMenuId === project.id}
-                    <div class="project-context-menu">
+                    <div class="sidebar-context-menu">
                       <button class="context-menu-item" onclick={() => startRenameProject(project.id, project.name)}>
                         Rename
                       </button>
@@ -708,7 +707,7 @@
             <span class="sidebar-item-name">+ New chat</span>
           </button>
           {#each app.conversations as convo}
-            <div class="sidebar-project-item" class:active={convo.id === app.currentConversation?.id}>
+            <div class="sidebar-list-item" class:active={convo.id === app.currentConversation?.id}>
               {#if renamingConvoId === convo.id}
                 <input
                   class="sidebar-rename-input"
@@ -743,7 +742,7 @@
                     </svg>
                   </button>
                   {#if convoMenuId === convo.id}
-                    <div class="project-context-menu">
+                    <div class="sidebar-context-menu">
                       <button class="context-menu-item" onclick={() => startRenameConvo(convo.id, convo.title)}>
                         Rename
                       </button>
@@ -1439,13 +1438,13 @@
   }
 
   /* Project sidebar items */
-  .sidebar-project-item {
+  .sidebar-list-item {
     display: flex;
     align-items: center;
     gap: var(--space-1);
   }
 
-  .sidebar-project-item > .sidebar-item {
+  .sidebar-list-item > .sidebar-item {
     flex: 1;
     min-width: 0;
   }
@@ -1470,7 +1469,7 @@
     transition: color var(--transition-fast), opacity var(--transition-fast);
   }
 
-  .sidebar-project-item:hover .sidebar-action-btn,
+  .sidebar-list-item:hover .sidebar-action-btn,
   .sidebar-action-btn:global(.menu-open) {
     opacity: 1;
   }
@@ -1479,7 +1478,7 @@
     color: var(--color-text);
   }
 
-  .project-context-menu {
+  .sidebar-context-menu {
     position: absolute;
     top: 100%;
     right: 0;
