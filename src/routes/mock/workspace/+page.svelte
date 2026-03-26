@@ -77,6 +77,9 @@
     });
   });
 
+  let galleryReferenceImages = $derived(filteredGalleryImages.filter(img => img.source === 'user'));
+  let galleryGeneratedImages = $derived(filteredGalleryImages.filter(img => img.source !== 'user'));
+
   function startRenameImage(id: string, currentLabel: string) {
     galleryMenuImageId = null;
     renamingImageId = id;
@@ -164,9 +167,6 @@
 
   // ── Debug panel state ──
   let debugPanelOpen = $state(false);
-  let layoutShifts = $state<Array<{ time: number; value: number; sources: string[] }>>([]);
-  let scrollMetrics = $state({ scrollTop: 0, scrollHeight: 0, clientHeight: 0, spacerHeight: 0 });
-  let roFireCount = $state(0);
 
   // Sync API key input with store
   $effect.pre(() => {
@@ -254,28 +254,6 @@
       await selectProject(app.projects[0].id);
     }
 
-    // Layout Instability API: detect which elements cause layout shifts.
-    if ('PerformanceObserver' in window) {
-      const po = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries() as (PerformanceEntry & { value: number; sources?: Array<{ node?: Node }> })[]) {
-          const sources = (entry.sources ?? [])
-            .map((s) => {
-              const el = s.node as HTMLElement | null;
-              if (!el) return '(unknown)';
-              const tag = el.tagName?.toLowerCase() ?? '?';
-              const cls = el.className ? `.${String(el.className).split(' ')[0]}` : '';
-              return `${tag}${cls}`;
-            });
-          layoutShifts = [...layoutShifts, {
-            time: Math.round(entry.startTime),
-            value: Math.round(entry.value * 10000) / 10000,
-            sources
-          }];
-          console.warn('[layout-shift]', entry.value.toFixed(4), sources.join(', '));
-        }
-      });
-      po.observe({ type: 'layout-shift', buffered: false });
-    }
   });
 
   // System notice detection (agent-first conversation initiation)
@@ -518,29 +496,16 @@
     }
     update();
     // Update debug scroll metrics on scroll.
-    function updateDebugMetrics() {
-      scrollMetrics = {
-        scrollTop: Math.round(node.scrollTop),
-        scrollHeight: node.scrollHeight,
-        clientHeight: node.clientHeight,
-        spacerHeight: spacerEl?.offsetHeight ?? 0
-      };
-    }
-    node.addEventListener('scroll', () => { update(); updateDebugMetrics(); }, { passive: true });
+    node.addEventListener('scroll', update, { passive: true });
     // RO handles fade-overlay classes only. updateSpacer() is deliberately
     // NOT called here: content reflows (details toggle, suggested replies)
     // change the input area height, which changes clientHeight, which would
     // trigger spacer recalculation and cause scroll jumps. Spacer updates
     // come from the $effect (message/streaming changes) and window resize.
-    const ro = new ResizeObserver(() => {
-      roFireCount++;
-      update();
-      updateDebugMetrics();
-    });
+    const ro = new ResizeObserver(() => update());
     ro.observe(node);
     function onWindowResize() {
       updateSpacer();
-      updateDebugMetrics();
     }
     window.addEventListener('resize', onWindowResize);
     return {
@@ -605,10 +570,6 @@
     if (!turn.isRunning && !turn.isSettling) updateSpacer();
   });
 
-  function debugClearShifts() {
-    layoutShifts = [];
-    roFireCount = 0;
-  }
 </script>
 
 <div class="app">
@@ -1134,21 +1095,13 @@
         <div class="fade-container">
           <div class="fade-top"></div>
           <div class="scroll-content" use:trackScroll>
-            {#if filteredGalleryImages.length === 0}
-              <p class="empty-state">
-                {#if gallerySearch.trim()}
-                  No images match "{gallerySearch}".
-                {:else}
-                  No images yet.
-                {/if}
-              </p>
-            {:else}
+            {#snippet galleryGrid(images: typeof filteredGalleryImages)}
               <div
                 class="gallery-grid"
                 class:gallery-small={gallerySize === 'small'}
                 class:gallery-large={gallerySize === 'large'}
               >
-                {#each filteredGalleryImages as img}
+                {#each images as img}
                   <!-- svelte-ignore a11y_click_events_have_key_events -->
                   <!-- svelte-ignore a11y_no_static_element_interactions -->
                   <div class="gallery-item" onclick={() => openLightbox(img.id)}>
@@ -1226,6 +1179,25 @@
                   </div>
                 {/each}
               </div>
+            {/snippet}
+
+            {#if filteredGalleryImages.length === 0}
+              <p class="empty-state">
+                {#if gallerySearch.trim()}
+                  No images match "{gallerySearch}".
+                {:else}
+                  No images yet.
+                {/if}
+              </p>
+            {:else}
+              {#if galleryReferenceImages.length > 0}
+                <div class="gallery-section-header">Reference</div>
+                {@render galleryGrid(galleryReferenceImages)}
+              {/if}
+              {#if galleryGeneratedImages.length > 0}
+                <div class="gallery-section-header">Generated</div>
+                {@render galleryGrid(galleryGeneratedImages)}
+              {/if}
             {/if}
           </div>
           <div class="fade-bottom"></div>
@@ -1332,10 +1304,6 @@
 
 {#if debugPanelOpen}
   <DebugPanel
-    {scrollMetrics}
-    {layoutShifts}
-    {roFireCount}
-    onclearshifts={debugClearShifts}
     onanchor={() => requestAnimationFrame(() => requestAnimationFrame(anchorToUserMessage))}
     onclose={() => debugPanelOpen = false}
   />
@@ -2068,6 +2036,19 @@
     border-radius: var(--radius-md);
     z-index: 20;
     margin-top: var(--space-1);
+  }
+
+  .gallery-section-header {
+    font-size: var(--text-xs);
+    font-family: var(--font-sans);
+    color: var(--color-text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: var(--space-2) var(--space-8);
+  }
+
+  .gallery-section-header + .gallery-grid {
+    margin-top: 0;
   }
 
   .gallery-label {

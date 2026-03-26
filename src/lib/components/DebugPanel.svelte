@@ -7,20 +7,71 @@
     cancelTurn,
     type SimulationStep,
   } from '$lib/stores/turnState.svelte';
+  import { debugInjectFault } from '$lib/engine/turn';
+  import { buildContextDump } from '$lib/engine/context-dump';
+  import { buildOrchestratorPrompt } from '$lib/engine/agents/orchestrator';
+  import { countTokens } from '$lib/engine/gemini';
+  import { listAgentSessions } from '$lib/db/operations';
+  import { TEXT_MODEL } from '$lib/types/schema';
+  import type { Content } from '@google/genai';
 
   interface Props {
-    scrollMetrics: { scrollTop: number; scrollHeight: number; clientHeight: number; spacerHeight: number };
-    layoutShifts: Array<{ time: number; value: number; sources: string[] }>;
-    roFireCount: number;
-    onclearshifts: () => void;
     onanchor: () => void;
     onclose: () => void;
   }
 
-  let { scrollMetrics, layoutShifts, roFireCount, onclearshifts, onanchor, onclose }: Props = $props();
+  let { onanchor, onclose }: Props = $props();
 
   const app = getAppState();
   const turn = getTurnState();
+
+  // ── Context snapshot ──
+  let snapshotStatus = $state<string | null>(null);
+
+  async function copyContext() {
+    if (!app.currentProject || !app.currentConversation) {
+      snapshotStatus = 'No conversation';
+      return;
+    }
+    snapshotStatus = 'Building...';
+
+    try {
+      const session = app.orchestratorSession;
+      const history: Content[] = session?.history ?? [];
+
+      const systemPrompt = session?.systemPrompt
+        || buildOrchestratorPrompt(
+          app.currentProject.name,
+          app.agentMemories,
+          app.projectImages,
+          app.projectImages.filter(img => img.favorite)
+        );
+
+      const allSessions = await listAgentSessions(app.currentConversation.id);
+      const subagentSessions = allSessions.filter(s => s.agentType !== 'orchestrator');
+
+      const { text: contextDump, imageCount, imageTotalKB } = buildContextDump(systemPrompt, history, subagentSessions);
+
+      let tokenCount: number | null = null;
+      const apiKey = app.settings?.geminiApiKey;
+      if (apiKey) {
+        tokenCount = await countTokens(apiKey, TEXT_MODEL, history, systemPrompt);
+      }
+
+      const turns = Math.floor(history.length / 2);
+      const header = [
+        `Snapshot: ${new Date().toISOString()}`,
+        `Turns: ${turns}  Entries: ${history.length}  Images: ${imageCount} (${imageTotalKB} KB)`,
+        tokenCount != null ? `Tokens: ${tokenCount}` : null,
+        '---',
+      ].filter(Boolean).join('\n');
+
+      await navigator.clipboard.writeText(`${header}\n${contextDump}`);
+      snapshotStatus = `Copied (${turns}t, ${tokenCount ?? '?'}tok)`;
+    } catch {
+      snapshotStatus = 'Error';
+    }
+  }
 
   let fakeMessageCounter = $state(0);
 
@@ -64,19 +115,8 @@
 
 <div class="debug-panel">
   <div class="debug-header">
-    <strong>Scroll Debug</strong>
+    <strong>Debug</strong>
     <button onclick={onclose}>&times;</button>
-  </div>
-
-  <div class="debug-section">
-    <div class="debug-label">Scroll Metrics</div>
-    <div class="debug-metrics">
-      <span>scrollTop: {scrollMetrics.scrollTop}</span>
-      <span>scrollHeight: {scrollMetrics.scrollHeight}</span>
-      <span>clientHeight: {scrollMetrics.clientHeight}</span>
-      <span>spacer: {scrollMetrics.spacerHeight}</span>
-      <span>RO fires: {roFireCount}</span>
-    </div>
   </div>
 
   <div class="debug-section">
@@ -90,7 +130,7 @@
   </div>
 
   <div class="debug-section">
-    <div class="debug-label">Simulate Turn</div>
+    <div class="debug-label">Simulate Turn / Fault Injection</div>
     <div class="debug-buttons">
       <button onclick={() => simulateTurn(debugSimScript)} disabled={turn.isRunning}>
         Stream only
@@ -103,27 +143,22 @@
       </button>
       <button onclick={() => cancelTurn()} disabled={!turn.isRunning}>Cancel</button>
     </div>
+    <div class="debug-buttons" style="margin-top: 4px;">
+      <button onclick={() => debugInjectFault(0)} title="Next turn fails before first API call">
+        Fault R0
+      </button>
+      <button onclick={() => debugInjectFault(1)} title="Next turn fails after first round">
+        Fault R1
+      </button>
+    </div>
   </div>
 
   <div class="debug-section">
-    <div class="debug-label">Layout Shifts ({layoutShifts.length})</div>
+    <div class="debug-label">Context Snapshot</div>
     <div class="debug-buttons">
-      <button onclick={onclearshifts}>Clear</button>
-      <button onclick={() => {
-        const text = layoutShifts.map(s => `${s.time}ms\t${s.value}\t${s.sources.join(', ')}`).join('\n');
-        navigator.clipboard.writeText(text);
-      }}>Copy log</button>
-    </div>
-    <div class="debug-shifts">
-      {#each layoutShifts.slice(-10) as shift}
-        <div class="debug-shift-entry">
-          <span class="debug-shift-time">{shift.time}ms</span>
-          <span class="debug-shift-value">{shift.value}</span>
-          <span class="debug-shift-sources">{shift.sources.join(', ')}</span>
-        </div>
-      {/each}
-      {#if layoutShifts.length === 0}
-        <div class="debug-shift-empty">No shifts detected</div>
+      <button onclick={copyContext}>Copy context</button>
+      {#if snapshotStatus}
+        <span class="debug-snapshot-status">{snapshotStatus}</span>
       {/if}
     </div>
   </div>
@@ -177,16 +212,6 @@
     letter-spacing: 0.5px;
   }
 
-  .debug-metrics {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 12px;
-  }
-
-  .debug-metrics span {
-    white-space: nowrap;
-  }
-
   .debug-buttons {
     display: flex;
     flex-wrap: wrap;
@@ -213,35 +238,8 @@
     cursor: default;
   }
 
-  .debug-shifts {
-    max-height: 120px;
-    overflow-y: auto;
-    margin-top: 4px;
-  }
-
-  .debug-shift-entry {
-    display: flex;
-    gap: 8px;
-    padding: 1px 0;
-    border-bottom: 1px solid #222;
-  }
-
-  .debug-shift-time {
-    color: #888;
-    min-width: 60px;
-  }
-
-  .debug-shift-value {
-    color: #e88;
-    min-width: 50px;
-  }
-
-  .debug-shift-sources {
+  .debug-snapshot-status {
     color: #8be;
-  }
-
-  .debug-shift-empty {
-    color: #666;
-    font-style: italic;
+    align-self: center;
   }
 </style>
