@@ -208,6 +208,20 @@ export async function refreshAgentMemories(): Promise<void> {
   }
 }
 
+export async function deleteAgentMemory(id: string): Promise<void> {
+  await ops.deleteAgentMemory(id);
+  if (currentProject) {
+    agentMemories = await ops.listAgentMemories(currentProject.id);
+  }
+}
+
+export async function updateAgentMemory(id: string, patch: Partial<{ title: string; content: string }>): Promise<void> {
+  await ops.updateAgentMemory(id, patch);
+  if (currentProject) {
+    agentMemories = await ops.listAgentMemories(currentProject.id);
+  }
+}
+
 export async function refreshProjectImages(): Promise<void> {
   if (currentProject) {
     projectImages = await ops.listImages(currentProject.id);
@@ -286,6 +300,13 @@ export async function deleteImage(imageId: string): Promise<void> {
 
 export async function toggleFavorite(imageId: string): Promise<void> {
   await ops.toggleImageFavorite(imageId);
+  if (currentProject) {
+    projectImages = await ops.listImages(currentProject.id);
+  }
+}
+
+export async function renameImage(imageId: string, label: string): Promise<void> {
+  await ops.updateImageLabel(imageId, label);
   if (currentProject) {
     projectImages = await ops.listImages(currentProject.id);
   }

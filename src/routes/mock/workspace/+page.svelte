@@ -17,13 +17,17 @@
     selectConversation,
     createProject,
     createConversation,
+    deleteAgentMemory,
     deleteConversation,
+    deleteImage,
     deleteProject,
     exportProject,
     importProject,
     renameConversation,
+    renameImage,
     renameProject,
     toggleFavorite,
+    updateAgentMemory,
     resolveImageId,
   } from '$lib/stores/appState.svelte';
   import {
@@ -40,11 +44,11 @@
   const turn = getTurnState();
 
   // Local UI state
-  type SidebarView = 'projects' | 'conversations' | 'images' | 'memories' | 'settings';
+  type SidebarView = 'projects' | 'conversations' | 'images' | 'settings';
   type CanvasView = 'chat' | 'gallery' | 'memories';
   let activeView = $state<SidebarView>('conversations');
   let canvasView = $state<CanvasView>('chat');
-  let sidebarOpen = $state(true);
+  let sidebarExpanded = $state(true);
   let isDragging = $state(false);
   let isRollingBack = $state(false);
   let rollbackImageIds = $state<string[]>([]);
@@ -52,6 +56,91 @@
   let chatScrollEl = $state<HTMLElement | null>(null);
   let activityExpanded = $state(false);
   let apiKeyInput = $state('');
+
+  // ── Gallery state ──
+  type GallerySize = 'small' | 'medium' | 'large';
+  let gallerySearch = $state('');
+  let gallerySize = $state<GallerySize>('medium');
+  let renamingImageId = $state<string | null>(null);
+  let renamingImageLabel = $state('');
+  let confirmDeleteImageId = $state<string | null>(null);
+  let galleryMenuImageId = $state<string | null>(null);
+
+  let filteredGalleryImages = $derived(() => {
+    const images = app.imagesByRecency;
+    if (!gallerySearch.trim()) return images;
+    const q = gallerySearch.toLowerCase();
+    return images.filter(img => {
+      const label = img.label?.toLowerCase() ?? '';
+      const ctx = img.generationContext?.toLowerCase() ?? '';
+      return label.includes(q) || ctx.includes(q);
+    });
+  });
+
+  function startRenameImage(id: string, currentLabel: string) {
+    galleryMenuImageId = null;
+    renamingImageId = id;
+    renamingImageLabel = currentLabel;
+  }
+
+  async function commitRenameImage() {
+    if (renamingImageId && renamingImageLabel.trim()) {
+      await renameImage(renamingImageId, renamingImageLabel.trim());
+    }
+    renamingImageId = null;
+  }
+
+  function cancelRenameImage() {
+    renamingImageId = null;
+  }
+
+  async function handleDeleteImage(id: string) {
+    confirmDeleteImageId = null;
+    galleryMenuImageId = null;
+    await deleteImage(id);
+  }
+
+  // ── Memory editing state ──
+  let editingMemoryId = $state<string | null>(null);
+  let editingMemoryTitle = $state('');
+  let editingMemoryContent = $state('');
+  let confirmDeleteMemoryId = $state<string | null>(null);
+
+  function startEditMemory(id: string, title: string, content: string) {
+    editingMemoryId = id;
+    editingMemoryTitle = title;
+    editingMemoryContent = content;
+  }
+
+  async function commitEditMemory() {
+    if (editingMemoryId) {
+      await updateAgentMemory(editingMemoryId, {
+        title: editingMemoryTitle.trim(),
+        content: editingMemoryContent,
+      });
+    }
+    editingMemoryId = null;
+  }
+
+  function cancelEditMemory() {
+    editingMemoryId = null;
+  }
+
+  async function handleDeleteMemory(id: string) {
+    confirmDeleteMemoryId = null;
+    await deleteAgentMemory(id);
+  }
+
+  function handleActivityClick(view: SidebarView) {
+    if (activeView === view) {
+      sidebarExpanded = !sidebarExpanded;
+    } else {
+      activeView = view;
+      sidebarExpanded = true;
+    }
+    // Switching to conversations returns to chat canvas
+    if (view === 'conversations') canvasView = 'chat';
+  }
 
   // ── Debug panel state ──
   let debugPanelOpen = $state(false);
@@ -386,6 +475,16 @@
 
   let spacerEl = $state<HTMLElement | null>(null);
 
+  function autosize(node: HTMLTextAreaElement) {
+    function resize() {
+      node.style.height = 'auto';
+      node.style.height = node.scrollHeight + 'px';
+    }
+    resize();
+    node.addEventListener('input', resize);
+    return { destroy() { node.removeEventListener('input', resize); } };
+  }
+
   function trackChatScroll(node: HTMLElement) {
     chatScrollEl = node;
     const parent = node.parentElement!;
@@ -494,14 +593,13 @@
 
 <div class="app">
   <div class="workspace">
-      <!-- Activity bar + Sidebar -->
-      {#if sidebarOpen}
+      <!-- Activity bar: always visible -->
       <nav class="activity-bar">
         <div class="activity-top">
       <button
         class="activity-btn"
-        class:active={activeView === 'projects'}
-        onclick={() => activeView = 'projects'}
+        class:active={activeView === 'projects' && sidebarExpanded}
+        onclick={() => handleActivityClick('projects')}
         title="Projects"
       >
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -510,8 +608,8 @@
       </button>
       <button
         class="activity-btn"
-        class:active={activeView === 'conversations'}
-        onclick={() => activeView = 'conversations'}
+        class:active={activeView === 'conversations' && sidebarExpanded}
+        onclick={() => handleActivityClick('conversations')}
         title="Conversations"
       >
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -520,8 +618,8 @@
       </button>
       <button
         class="activity-btn"
-        class:active={activeView === 'images'}
-        onclick={() => activeView = 'images'}
+        class:active={activeView === 'images' && sidebarExpanded}
+        onclick={() => handleActivityClick('images')}
         title="Images"
       >
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -532,19 +630,8 @@
       </button>
       <button
         class="activity-btn"
-        class:active={activeView === 'memories'}
-        onclick={() => activeView = 'memories'}
-        title="Memories"
-      >
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z" />
-          <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z" />
-        </svg>
-      </button>
-      <button
-        class="activity-btn"
-        class:active={activeView === 'settings'}
-        onclick={() => activeView = 'settings'}
+        class:active={activeView === 'settings' && sidebarExpanded}
+        onclick={() => handleActivityClick('settings')}
         title="Settings"
       >
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -555,7 +642,8 @@
         </div>
       </nav>
 
-      <!-- Sidebar: content changes based on active view -->
+      <!-- Sidebar panel: collapsible -->
+      {#if sidebarExpanded}
       <aside class="sidebar">
         {#if activeView === 'projects'}
       <div class="fade-container">
@@ -700,18 +788,12 @@
       </div>
 
     {:else if activeView === 'images'}
-      <button class="sidebar-action" onclick={() => canvasView = 'gallery'}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <rect x="3" y="3" width="7" height="7" />
-          <rect x="14" y="3" width="7" height="7" />
-          <rect x="3" y="14" width="7" height="7" />
-          <rect x="14" y="14" width="7" height="7" />
-        </svg>
-        Open gallery
-      </button>
       <div class="fade-container">
         <div class="fade-top"></div>
         <div class="sidebar-scroll queue-grid" use:trackScroll>
+          <button class="sidebar-item sidebar-new-chat" onclick={() => canvasView = 'gallery'}>
+            <span class="sidebar-item-name">&rsaquo; Open gallery</span>
+          </button>
           {#each app.imagesByRecency as img}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -744,21 +826,11 @@
         <div class="fade-bottom"></div>
       </div>
 
-    {:else if activeView === 'memories'}
-      <div class="fade-container">
-        <div class="fade-top"></div>
-        <div class="sidebar-scroll" use:trackScroll>
-          {#each app.agentMemories as mem}
-            <button class="sidebar-item" onclick={() => canvasView = 'memories'}>
-              <span class="sidebar-item-name">{mem.title}</span>
-            </button>
-          {/each}
-        </div>
-        <div class="fade-bottom"></div>
-      </div>
-
     {:else if activeView === 'settings'}
       <div class="settings-sidebar">
+        <button class="sidebar-item sidebar-new-chat" onclick={() => canvasView = 'memories'}>
+          <span class="sidebar-item-name">&rsaquo; Project memories</span>
+        </button>
         <label class="settings-label">
           <span class="settings-label-text">Gemini API Key</span>
           <input
@@ -782,34 +854,6 @@
       ondragleave={handleDragLeave}
       ondrop={handleDrop}
     >
-      <div class="canvas-header">
-        <button class="sidebar-toggle" onclick={() => sidebarOpen = !sidebarOpen} title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <path d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-        </button>
-        {#if canvasView !== 'chat'}
-          <button class="back-btn" onclick={() => canvasView = 'chat'} title="Back to chat">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <path d="M19 12H5M12 19l-7-7 7-7" />
-            </svg>
-          </button>
-        {/if}
-        {#if canvasView === 'chat'}
-          {#if app.currentProject}
-            <span class="canvas-header-link">{app.currentProject.name}</span>
-          {/if}
-          {#if app.currentConversation}
-            <span class="canvas-header-sep">/</span>
-            <span class="canvas-header-title">{app.currentConversation.title}</span>
-          {/if}
-        {:else if canvasView === 'gallery'}
-          <span class="canvas-header-title">Image Gallery</span>
-        {:else if canvasView === 'memories'}
-          <span class="canvas-header-title">Memories</span>
-        {/if}
-      </div>
-
       {#if canvasView === 'chat'}
         <div class="fade-container">
           <div class="fade-top"></div>
@@ -999,39 +1043,170 @@
         />
 
       {:else if canvasView === 'gallery'}
+        <div class="gallery-toolbar">
+          <div class="gallery-search-wrap">
+            <svg class="gallery-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8" />
+              <path d="M21 21l-4.35-4.35" />
+            </svg>
+            <input
+              class="gallery-search-input"
+              type="text"
+              placeholder="Search images..."
+              bind:value={gallerySearch}
+            />
+          </div>
+          <div class="gallery-size-selector">
+            <button
+              class="gallery-size-btn"
+              class:active={gallerySize === 'small'}
+              onclick={() => gallerySize = 'small'}
+              title="Small thumbnails"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <rect x="0" y="0" width="3" height="3" rx="0.5" />
+                <rect x="4.33" y="0" width="3" height="3" rx="0.5" />
+                <rect x="8.66" y="0" width="3" height="3" rx="0.5" />
+                <rect x="13" y="0" width="3" height="3" rx="0.5" />
+                <rect x="0" y="4.33" width="3" height="3" rx="0.5" />
+                <rect x="4.33" y="4.33" width="3" height="3" rx="0.5" />
+                <rect x="8.66" y="4.33" width="3" height="3" rx="0.5" />
+                <rect x="13" y="4.33" width="3" height="3" rx="0.5" />
+                <rect x="0" y="8.66" width="3" height="3" rx="0.5" />
+                <rect x="4.33" y="8.66" width="3" height="3" rx="0.5" />
+                <rect x="8.66" y="8.66" width="3" height="3" rx="0.5" />
+                <rect x="13" y="8.66" width="3" height="3" rx="0.5" />
+              </svg>
+            </button>
+            <button
+              class="gallery-size-btn"
+              class:active={gallerySize === 'medium'}
+              onclick={() => gallerySize = 'medium'}
+              title="Medium thumbnails"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <rect x="0" y="0" width="4.5" height="4.5" rx="0.5" />
+                <rect x="5.75" y="0" width="4.5" height="4.5" rx="0.5" />
+                <rect x="11.5" y="0" width="4.5" height="4.5" rx="0.5" />
+                <rect x="0" y="5.75" width="4.5" height="4.5" rx="0.5" />
+                <rect x="5.75" y="5.75" width="4.5" height="4.5" rx="0.5" />
+                <rect x="11.5" y="5.75" width="4.5" height="4.5" rx="0.5" />
+                <rect x="0" y="11.5" width="4.5" height="4.5" rx="0.5" />
+                <rect x="5.75" y="11.5" width="4.5" height="4.5" rx="0.5" />
+                <rect x="11.5" y="11.5" width="4.5" height="4.5" rx="0.5" />
+              </svg>
+            </button>
+            <button
+              class="gallery-size-btn"
+              class:active={gallerySize === 'large'}
+              onclick={() => gallerySize = 'large'}
+              title="Large thumbnails"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <rect x="0" y="0" width="7" height="7" rx="0.5" />
+                <rect x="9" y="0" width="7" height="7" rx="0.5" />
+                <rect x="0" y="9" width="7" height="7" rx="0.5" />
+                <rect x="9" y="9" width="7" height="7" rx="0.5" />
+              </svg>
+            </button>
+          </div>
+        </div>
         <div class="fade-container">
           <div class="fade-top"></div>
           <div class="scroll-content" use:trackScroll>
-            <div class="gallery-grid">
-              {#each app.imagesByRecency as img}
-                <!-- svelte-ignore a11y_click_events_have_key_events -->
-                <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <div class="gallery-item" onclick={() => openLightbox(img.id)}>
-                  <div class="gallery-thumb">
-                    {#if app.resolvedUrls[img.id]}
-                      <img src={app.resolvedUrls[img.id]} alt={img.label} />
+            {#if filteredGalleryImages().length === 0}
+              <p class="empty-state">
+                {#if gallerySearch.trim()}
+                  No images match "{gallerySearch}".
+                {:else}
+                  No images yet.
+                {/if}
+              </p>
+            {:else}
+              <div
+                class="gallery-grid"
+                class:gallery-small={gallerySize === 'small'}
+                class:gallery-large={gallerySize === 'large'}
+              >
+                {#each filteredGalleryImages() as img}
+                  <!-- svelte-ignore a11y_click_events_have_key_events -->
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <div class="gallery-item" onclick={() => openLightbox(img.id)}>
+                    <div class="gallery-thumb">
+                      {#if app.resolvedUrls[img.id]}
+                        <img src={app.resolvedUrls[img.id]} alt={img.label} />
+                      {:else}
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="1.5">
+                          <rect x="3" y="3" width="18" height="18" rx="2" />
+                          <circle cx="8.5" cy="8.5" r="1.5" />
+                          <path d="M21 15l-5-5L5 21" />
+                        </svg>
+                      {/if}
+                      <div class="gallery-item-actions">
+                        <button
+                          class="gallery-action-btn"
+                          class:favorited={app.favorites.has(img.id)}
+                          onclick={(e) => { e.stopPropagation(); toggleFavorite(img.id); }}
+                          title={app.favorites.has(img.id) ? 'Remove from favorites' : 'Add to favorites'}
+                        >
+                          <svg width="16" height="16" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" fill={app.favorites.has(img.id) ? 'currentColor' : 'none'}>
+                            <path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.27 5.82 22 7 14.14 2 9.27l6.91-1.01L12 2z" />
+                          </svg>
+                        </button>
+                        <div class="gallery-menu-anchor">
+                          <button
+                            class="gallery-action-btn"
+                            onclick={(e) => { e.stopPropagation(); galleryMenuImageId = galleryMenuImageId === img.id ? null : img.id; }}
+                            title="Image actions"
+                          >
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                              <circle cx="12" cy="5" r="2" />
+                              <circle cx="12" cy="12" r="2" />
+                              <circle cx="12" cy="19" r="2" />
+                            </svg>
+                          </button>
+                          {#if galleryMenuImageId === img.id}
+                            <div class="gallery-context-menu">
+                              <button class="context-menu-item" onclick={(e) => { e.stopPropagation(); startRenameImage(img.id, img.label); }}>
+                                Rename
+                              </button>
+                              {#if confirmDeleteImageId === img.id}
+                                <div class="context-menu-confirm">
+                                  <span class="confirm-text">Delete?</span>
+                                  <button class="confirm-yes" onclick={(e) => { e.stopPropagation(); handleDeleteImage(img.id); }}>Yes</button>
+                                  <button class="confirm-no" onclick={(e) => { e.stopPropagation(); confirmDeleteImageId = null; galleryMenuImageId = null; }}>No</button>
+                                </div>
+                              {:else}
+                                <button class="context-menu-item context-menu-danger" onclick={(e) => { e.stopPropagation(); confirmDeleteImageId = img.id; }}>
+                                  Delete
+                                </button>
+                              {/if}
+                            </div>
+                          {/if}
+                        </div>
+                      </div>
+                    </div>
+                    {#if renamingImageId === img.id}
+                      <!-- svelte-ignore a11y_autofocus -->
+                      <input
+                        class="gallery-rename-input"
+                        type="text"
+                        bind:value={renamingImageLabel}
+                        onclick={(e) => e.stopPropagation()}
+                        onkeydown={(e) => {
+                          if (e.key === 'Enter') commitRenameImage();
+                          if (e.key === 'Escape') cancelRenameImage();
+                        }}
+                        onblur={commitRenameImage}
+                        autofocus
+                      />
                     {:else}
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="1.5">
-                        <rect x="3" y="3" width="18" height="18" rx="2" />
-                        <circle cx="8.5" cy="8.5" r="1.5" />
-                        <path d="M21 15l-5-5L5 21" />
-                      </svg>
+                      <span class="gallery-label">{img.label}</span>
                     {/if}
-                    <button
-                      class="fav-btn gallery-fav"
-                      class:favorited={app.favorites.has(img.id)}
-                      onclick={(e) => { e.stopPropagation(); toggleFavorite(img.id); }}
-                      title={app.favorites.has(img.id) ? 'Remove from favorites' : 'Add to favorites'}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" fill={app.favorites.has(img.id) ? 'currentColor' : 'none'}>
-                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.27 5.82 22 7 14.14 2 9.27l6.91-1.01L12 2z" />
-                      </svg>
-                    </button>
                   </div>
-                  <span class="gallery-label">{img.label}</span>
-                </div>
-              {/each}
-            </div>
+                {/each}
+              </div>
+            {/if}
           </div>
           <div class="fade-bottom"></div>
         </div>
@@ -1041,15 +1216,68 @@
           <div class="fade-top"></div>
           <div class="scroll-content" use:trackScroll>
             <div class="memories-canvas">
-              {#each app.agentMemories as mem}
-                <div class="memory-card">
-                  <div class="memory-card-title">{mem.title}</div>
-                  <div class="memory-card-summary">{mem.summary}</div>
-                  <div class="memory-card-body">{mem.content}</div>
-                </div>
-              {/each}
               {#if app.agentMemories.length === 0}
                 <p class="empty-state">No memories yet. The agent will create notes as you work together.</p>
+              {:else}
+                {#each app.agentMemories as mem}
+                  <div class="memory-entry">
+                    {#if editingMemoryId === mem.id}
+                      <div class="memory-edit">
+                        <!-- svelte-ignore a11y_autofocus -->
+                        <input
+                          class="memory-edit-title"
+                          type="text"
+                          bind:value={editingMemoryTitle}
+                          onkeydown={(e) => { if (e.key === 'Escape') cancelEditMemory(); }}
+                          autofocus
+                        />
+                        <textarea
+                          class="memory-edit-content"
+                          bind:value={editingMemoryContent}
+                          onkeydown={(e) => { if (e.key === 'Escape') cancelEditMemory(); }}
+                          use:autosize
+                        ></textarea>
+                        <div class="memory-edit-actions">
+                          <button class="memory-save-btn" onclick={commitEditMemory}>Save</button>
+                          <button class="memory-cancel-btn" onclick={cancelEditMemory}>Cancel</button>
+                        </div>
+                      </div>
+                    {:else}
+                      <div class="memory-header">
+                        <div class="memory-title">{mem.title}</div>
+                        <div class="memory-actions">
+                          <button
+                            class="memory-action-btn"
+                            onclick={() => startEditMemory(mem.id, mem.title, mem.content)}
+                            title="Edit memory"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                              <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+                            </svg>
+                          </button>
+                          {#if confirmDeleteMemoryId === mem.id}
+                            <span class="confirm-text">Delete?</span>
+                            <button class="confirm-yes" onclick={() => handleDeleteMemory(mem.id)}>Yes</button>
+                            <button class="confirm-no" onclick={() => confirmDeleteMemoryId = null}>No</button>
+                          {:else}
+                            <button
+                              class="memory-action-btn memory-delete-btn"
+                              onclick={() => confirmDeleteMemoryId = mem.id}
+                              title="Delete memory"
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
+                              </svg>
+                            </button>
+                          {/if}
+                        </div>
+                      </div>
+                      <div class="memory-summary">{mem.summary}</div>
+                      <div class="memory-body">{mem.content}</div>
+                    {/if}
+                  </div>
+                {/each}
               {/if}
             </div>
           </div>
@@ -1066,14 +1294,16 @@
 <svelte:window
   onkeydown={(e) => { if (e.ctrlKey && e.shiftKey && e.key === 'D') { debugPanelOpen = !debugPanelOpen; e.preventDefault(); }}}
   onclick={(e) => {
-    if (projectMenuId || convoMenuId) {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.sidebar-menu-anchor')) {
-        projectMenuId = null;
-        convoMenuId = null;
-        confirmDeleteProjectId = null;
-        confirmDeleteConvoId = null;
-      }
+    const target = e.target as HTMLElement;
+    if ((projectMenuId || convoMenuId) && !target.closest('.sidebar-menu-anchor')) {
+      projectMenuId = null;
+      convoMenuId = null;
+      confirmDeleteProjectId = null;
+      confirmDeleteConvoId = null;
+    }
+    if (galleryMenuImageId && !target.closest('.gallery-menu-anchor')) {
+      galleryMenuImageId = null;
+      confirmDeleteImageId = null;
     }
   }}
 />
@@ -1119,80 +1349,6 @@
   .workspace {
     display: flex;
     height: 100%;
-  }
-
-  /* Canvas header: floating breadcrumb / back navigation */
-  .canvas-header {
-    position: absolute;
-    top: 0;
-    left: 0;
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-4);
-    z-index: 2;
-    pointer-events: none;
-  }
-
-  .canvas-header > * {
-    pointer-events: auto;
-  }
-
-  .back-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--color-text-tertiary);
-    cursor: pointer;
-    transition: color var(--transition-fast);
-  }
-
-  .back-btn:hover {
-    color: var(--color-text);
-  }
-
-  .sidebar-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--color-text-tertiary);
-    cursor: pointer;
-    transition: color var(--transition-fast);
-  }
-
-  .sidebar-toggle:hover {
-    color: var(--color-text);
-  }
-
-  .canvas-header-link {
-    font-size: var(--text-base);
-    color: var(--color-text-tertiary);
-    text-decoration: none;
-    transition: color var(--transition-fast);
-  }
-
-  .canvas-header-link:hover {
-    color: var(--color-text);
-  }
-
-  .canvas-header-sep {
-    font-size: var(--text-base);
-    color: var(--color-text-tertiary);
-  }
-
-  .canvas-header-title {
-    font-size: var(--text-base);
-    color: var(--color-text-secondary);
   }
 
   /* Activity bar */
@@ -1730,26 +1886,78 @@
   }
 
 
-  /* Sidebar action button */
-  .sidebar-action {
+  /* Gallery toolbar */
+  .gallery-toolbar {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
-    width: 100%;
-    padding: var(--space-2) var(--space-3);
-    border: none;
-    background: transparent;
-    color: var(--color-text-secondary);
-    font-size: var(--text-sm);
-    font-family: var(--font-sans);
-    text-align: left;
-    cursor: pointer;
+    justify-content: center;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-4) var(--space-3);
     flex-shrink: 0;
-    transition: color var(--transition-fast);
   }
 
-  .sidebar-action:hover {
-    color: var(--color-accent);
+  .gallery-search-wrap {
+    position: relative;
+    flex: 1;
+    max-width: 320px;
+  }
+
+  .gallery-search-icon {
+    position: absolute;
+    left: var(--space-2);
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--color-text-tertiary);
+    pointer-events: none;
+  }
+
+  .gallery-search-input {
+    width: 100%;
+    padding: var(--space-2) var(--space-3) var(--space-2) calc(var(--space-2) + 20px);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-1);
+    color: var(--color-text);
+    font-size: var(--text-sm);
+    font-family: var(--font-sans);
+    outline: none;
+    transition: border-color var(--transition-fast);
+  }
+
+  .gallery-search-input:focus {
+    border-color: var(--color-border-hover);
+  }
+
+  .gallery-search-input::placeholder {
+    color: var(--color-text-tertiary);
+  }
+
+  .gallery-size-selector {
+    display: flex;
+    gap: 2px;
+  }
+
+  .gallery-size-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-tertiary);
+    cursor: pointer;
+    transition: color var(--transition-fast), background var(--transition-fast);
+  }
+
+  .gallery-size-btn:hover {
+    color: var(--color-text-secondary);
+  }
+
+  .gallery-size-btn.active {
+    color: var(--color-text);
+    background: var(--color-surface-1);
   }
 
   /* Gallery canvas */
@@ -1760,13 +1968,18 @@
     padding: var(--space-4) var(--space-8);
   }
 
-  .gallery-item {
-    cursor: pointer;
-    transition: opacity var(--transition-fast);
+  .gallery-grid.gallery-small {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: var(--space-3);
   }
 
-  .gallery-item:hover {
-    opacity: 0.85;
+  .gallery-grid.gallery-large {
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--space-6);
+  }
+
+  .gallery-item {
+    cursor: pointer;
   }
 
   .gallery-thumb {
@@ -1779,65 +1992,230 @@
     background: var(--color-surface-1);
     border-radius: var(--radius-md);
     margin-bottom: var(--space-2);
+    overflow: hidden;
   }
 
-  .gallery-fav {
+  .gallery-item-actions {
     position: absolute;
     top: var(--space-1);
     right: var(--space-1);
-    width: 24px;
-    height: 24px;
+    display: flex;
+    gap: 2px;
     opacity: 0;
-    transition: opacity var(--transition-fast), color var(--transition-fast);
+    transition: opacity var(--transition-fast);
   }
 
-  .gallery-fav.favorited {
+  .gallery-item:hover .gallery-item-actions,
+  .gallery-item-actions:has(.favorited) {
     opacity: 1;
   }
 
-  .gallery-item:hover .gallery-fav {
-    opacity: 1;
+  .gallery-action-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: rgba(13, 11, 9, 0.6);
+    color: var(--color-text-tertiary);
+    cursor: pointer;
+    transition: color var(--transition-fast);
+  }
+
+  .gallery-action-btn:hover {
+    color: var(--color-text);
+  }
+
+  .gallery-action-btn.favorited {
+    color: var(--color-accent);
+  }
+
+  .gallery-menu-anchor {
+    position: relative;
+  }
+
+  .gallery-context-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    min-width: 120px;
+    padding: var(--space-1);
+    background: var(--color-surface-2);
+    border-radius: var(--radius-md);
+    z-index: 20;
+    margin-top: var(--space-1);
   }
 
   .gallery-label {
     font-size: var(--text-sm);
     color: var(--color-text-secondary);
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .gallery-rename-input {
+    width: 100%;
+    padding: var(--space-1);
+    border: 1px solid var(--color-border-hover);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-1);
+    color: var(--color-text);
+    font-size: var(--text-sm);
+    font-family: var(--font-sans);
+    outline: none;
   }
 
   /* Memories canvas */
   .memories-canvas {
     display: flex;
     flex-direction: column;
-    gap: var(--space-4);
     padding: var(--space-4) var(--space-8);
     max-width: var(--chat-max-width);
     margin: 0 auto;
   }
 
-  .memory-card {
-    padding: var(--space-4);
-    background: var(--color-surface-1);
-    border-radius: var(--radius-md);
+  .memory-entry {
+    padding: var(--space-4) 0;
+    border-bottom: 1px solid var(--color-surface-1);
   }
 
-  .memory-card-title {
-    font-size: var(--text-base);
-    font-weight: 500;
-    color: var(--color-text);
+  .memory-entry:last-child {
+    border-bottom: none;
+  }
+
+  .memory-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
     margin-bottom: var(--space-2);
   }
 
-  .memory-card-summary {
+  .memory-title {
+    font-size: var(--text-base);
+    font-weight: 500;
+    color: var(--color-text);
+    flex: 1;
+    min-width: 0;
+  }
+
+  .memory-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+  }
+
+  .memory-entry:hover .memory-actions {
+    opacity: 1;
+  }
+
+  .memory-action-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-tertiary);
+    cursor: pointer;
+    transition: color var(--transition-fast);
+  }
+
+  .memory-action-btn:hover {
+    color: var(--color-text);
+  }
+
+  .memory-delete-btn:hover {
+    color: #e55;
+  }
+
+  .memory-summary {
     font-size: var(--text-sm);
     color: var(--color-text-tertiary);
     margin-bottom: var(--space-2);
   }
 
-  .memory-card-body {
+  .memory-body {
     font-size: var(--text-sm);
     color: var(--color-text-secondary);
     line-height: 1.6;
     white-space: pre-wrap;
+  }
+
+  .memory-edit {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .memory-edit-title {
+    padding: var(--space-2);
+    border: 1px solid var(--color-border-hover);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-1);
+    color: var(--color-text);
+    font-size: var(--text-base);
+    font-weight: 500;
+    font-family: var(--font-sans);
+    outline: none;
+  }
+
+  .memory-edit-content {
+    padding: var(--space-2);
+    border: 1px solid var(--color-border-hover);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-1);
+    color: var(--color-text);
+    font-size: var(--text-sm);
+    font-family: var(--font-sans);
+    line-height: 1.6;
+    outline: none;
+    resize: none;
+    overflow: hidden;
+  }
+
+  .memory-edit-actions {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .memory-save-btn {
+    padding: var(--space-2) var(--space-4);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--color-accent);
+    color: var(--color-bg);
+    font-size: var(--text-sm);
+    font-family: var(--font-sans);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+  }
+
+  .memory-save-btn:hover {
+    background: var(--color-accent-hover);
+  }
+
+  .memory-cancel-btn {
+    padding: var(--space-2) var(--space-4);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-tertiary);
+    font-size: var(--text-sm);
+    font-family: var(--font-sans);
+    cursor: pointer;
+    transition: color var(--transition-fast);
+  }
+
+  .memory-cancel-btn:hover {
+    color: var(--color-text);
   }
 
   /* Rendered images in messages and thumbnails */

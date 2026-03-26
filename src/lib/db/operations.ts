@@ -159,6 +159,14 @@ export async function upsertAgentMemory(
   });
 }
 
+export async function deleteAgentMemory(id: string): Promise<void> {
+  await db.agentMemories.delete(id);
+}
+
+export async function updateAgentMemory(id: string, patch: Partial<Pick<AgentMemory, 'title' | 'content'>>): Promise<void> {
+  await db.agentMemories.update(id, { ...patch, updatedAt: now() });
+}
+
 /** Count memory topics in a project (no data loaded). */
 export async function countMemories(projectId: string): Promise<number> {
   return db.agentMemories.where('projectId').equals(projectId).count();
@@ -594,6 +602,10 @@ export async function toggleImageFavorite(id: string): Promise<boolean> {
   const newValue = !img.favorite;
   await db.imageMeta.update(id, { favorite: newValue });
   return newValue;
+}
+
+export async function updateImageLabel(id: string, label: string): Promise<void> {
+  await db.imageMeta.update(id, { label });
 }
 
 /** Search images by label or generationContext (case-insensitive substring match). */
