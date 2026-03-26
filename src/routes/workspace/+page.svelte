@@ -252,6 +252,9 @@
     await loadProjects();
     if (app.projects.length > 0 && !app.currentProject) {
       await selectProject(app.projects[0].id);
+      if (app.conversations.length > 0) {
+        await selectConversation(app.conversations[0].id);
+      }
     }
 
   });
