@@ -10,7 +10,7 @@ import type {
   AgentSession
 } from '$lib/types/schema';
 
-class BananaDB extends Dexie {
+class AppDatabase extends Dexie {
   projects!: EntityTable<Project, 'id'>;
   conversations!: EntityTable<Conversation, 'id'>;
   messages!: EntityTable<ChatMessage, 'id'>;
@@ -51,4 +51,4 @@ class BananaDB extends Dexie {
   }
 }
 
-export const db = new BananaDB();
+export const db = new AppDatabase();

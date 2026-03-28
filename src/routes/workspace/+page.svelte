@@ -3,13 +3,13 @@
   import { marked } from 'marked';
   import { onMount } from 'svelte';
   import { trackScroll } from '$lib/actions/trackScroll';
-
-  function autoFocus(node: HTMLElement) { node.focus(); }
   import Lightbox from '$lib/components/Lightbox.svelte';
   import InputArea from '$lib/components/InputArea.svelte';
   import DebugPanel from '$lib/components/DebugPanel.svelte';
 
   marked.setOptions({ breaks: true, gfm: true });
+
+  function autoFocus(node: HTMLElement) { node.focus(); }
   import {
     getAppState,
     loadSettings,
