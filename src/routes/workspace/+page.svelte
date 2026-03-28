@@ -219,10 +219,48 @@
       .trimEnd();
   }
 
+  /** A message ready for rendering: either persisted from DB or synthetic (live/pending). */
+  interface DisplayMessage {
+    id: string;
+    role: 'user' | 'assistant';
+    text: string;
+    imageIds: string[];
+    activityLog?: Array<{ text: string; nested: boolean }>;
+    isLive?: boolean;
+    createdAt: number;
+  }
+
+  let displayMessages = $derived.by((): DisplayMessage[] => {
+    const msgs: DisplayMessage[] = app.messages.map(m => m);
+
+    // Optimistic user message shown until the DB refresh includes it
+    if (pendingUserText) {
+      msgs.push({
+        id: '__pending__', role: 'user', text: pendingUserText,
+        imageIds: [], createdAt: Date.now(),
+      });
+    }
+
+    // Live assistant message during streaming
+    if (turn.isRunning && (turn.revealedText || turn.activityLog.length > 0 || turn.statusText)) {
+      // If refreshMessages already landed the persisted assistant message, skip
+      const last = msgs[msgs.length - 1];
+      if (!last || last.role !== 'assistant' || last.id === '__pending__') {
+        msgs.push({
+          id: '__live__', role: 'assistant', text: turn.revealedText,
+          imageIds: turn.liveImageIds,
+          activityLog: turn.activityLog.length > 0 ? [...turn.activityLog] : undefined,
+          isLive: true, createdAt: Date.now(),
+        });
+      }
+    }
+
+    return msgs;
+  });
+
   let suggestedReplies = $derived.by(() => {
-    const msgs = app.messages;
-    if (msgs.length === 0 || turn.isRunning) return [];
-    const last = msgs[msgs.length - 1];
+    if (displayMessages.length === 0 || turn.isRunning) return [];
+    const last = displayMessages[displayMessages.length - 1];
     if (last.role !== 'assistant') return [];
     return extractSuggestedReplies(last.text);
   });
@@ -561,17 +599,13 @@
   }
 
   $effect(() => {
-    // Recalculate spacer when the persisted message list changes or a
-    // pending user message appears.
-    //
-    // Skip during a running turn or settling: anchorToUserMessage()
-    // handles scroll positioning at turn start, and the spacer should
-    // not move while content is streaming or during the handoff.
-    // Window resizes are handled by a dedicated resize listener.
-    app.messages;
-    pendingUserText;
+    // Recalculate spacer when the display message list changes.
+    // Skip during a running turn: anchorToUserMessage() handles scroll
+    // positioning at turn start, and the spacer should not move while
+    // content is streaming. Window resizes are handled separately.
+    displayMessages;
 
-    if (!turn.isRunning && !turn.isSettling) updateSpacer();
+    if (!turn.isRunning) updateSpacer();
   });
 
 </script>
@@ -846,41 +880,46 @@
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div class="chat-column" onclick={handleMessageClick}>
-              {#if app.messages.length === 0 && !turn.isRunning && app.settings?.geminiApiKey}
+              {#if displayMessages.length === 0 && !turn.isRunning && app.settings?.geminiApiKey}
                 <div class="agent-first-prompt">
                   <button class="agent-first-btn" onclick={handleAgentFirst}>
                     Let the assistant start
                   </button>
                 </div>
               {/if}
-              {#each app.messages as msg, i}
-                {@const isLastAssistant = msg.role === 'assistant' && !app.messages.slice(i + 1).some((m: { role: string }) => m.role === 'assistant')}
-                {#if isLastAssistant && turn.isSettling}
-                  <!-- hidden during settle: streaming block still covers this message -->
-                {:else if msg.role === 'user' && isSystemNotice(msg.text)}
+              {#each displayMessages as msg, i}
+                {@const isLastAssistant = msg.role === 'assistant' && !displayMessages.slice(i + 1).some(m => m.role === 'assistant')}
+                {@const isPending = msg.id === '__pending__'}
+                {#if msg.role === 'user' && !isPending && isSystemNotice(msg.text)}
                   <!-- hidden: agent-first initiation message -->
                 {:else}
-                <div class="message" class:user={msg.role === 'user'} class:assistant={msg.role === 'assistant'} class:last-assistant={isLastAssistant}>
+                <div
+                  class="message"
+                  class:user={msg.role === 'user'}
+                  class:assistant={msg.role === 'assistant'}
+                  class:last-assistant={isLastAssistant}
+                  data-turn-anchor={isPending ? '' : undefined}
+                >
                   {#if msg.role === 'assistant' && msg.activityLog?.length}
                     {@const log = msg.activityLog}
                     {@const lastLogEntry = log[log.length - 1]}
                     {#if log.length === 1}
                       <div class="persisted-activity">
                         <div class="activity-summary-static">
-                          <span class="activity-dot static"></span>
+                          <span class="activity-dot" class:static={!msg.isLive}></span>
                           {lastLogEntry.text}
                         </div>
                       </div>
                     {:else}
                       <details
                         class="persisted-activity"
-                        open={isLastAssistant && !turn.isRunning && activityExpanded ? true : undefined}
+                        open={msg.isLive ? (activityExpanded || undefined) : (isLastAssistant && !turn.isRunning && activityExpanded ? true : undefined)}
                         ontoggle={(e) => {
                           if (isLastAssistant && !turn.isRunning) activityExpanded = e.currentTarget.open;
                         }}
                       >
                         <summary>
-                          <span class="activity-dot static"></span>
+                          <span class="activity-dot" class:static={!msg.isLive}></span>
                           {lastLogEntry.text}
                           <span class="activity-chevron-icon">
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -897,10 +936,19 @@
                         </div>
                       </details>
                     {/if}
+                  {:else if msg.isLive && turn.statusText}
+                    <div class="persisted-activity">
+                      <div class="activity-summary-static">
+                        <span class="activity-dot"></span>
+                        {turn.statusText}
+                      </div>
+                    </div>
                   {/if}
+                  {#if msg.text}
                     <div class="message-role">{msg.role === 'user' ? 'You' : 'Assistant'}</div>
                     <div class="message-text">{@html renderMessageText(msg.text)}</div>
-                  {#each msg.imageIds as imgId}
+                  {/if}
+                  {#each msg.isLive ? [] : msg.imageIds as imgId}
                     <div class="message-image">
                       {#if app.resolvedUrls[imgId]}
                         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -933,7 +981,7 @@
                       </button>
                     </div>
                   {/each}
-                  {#if isLastAssistant && !turn.isRunning}
+                  {#if isLastAssistant && !turn.isRunning && !msg.isLive}
                     <div class="rollback-row">
                       <button class="rollback-btn" title="Undo this turn" onclick={handleRollback} disabled={isRollingBack}>
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -947,67 +995,6 @@
                 </div>
                 {/if}
               {/each}
-
-              <!-- Optimistic user message (shown until persisted) -->
-              {#if pendingUserText}
-                <div class="message user" data-turn-anchor>
-                  <div class="message-role">You</div>
-                  <div class="message-text">{@html renderMessageText(pendingUserText)}</div>
-                </div>
-              {/if}
-
-              <!-- Live assistant message (activity log + streaming text in one block) -->
-              {#if turn.isRunning || turn.isSettling}
-                <div class="message assistant">
-                  {#if turn.activityLog.length > 0}
-                    {@const lastEntry = turn.activityLog[turn.activityLog.length - 1]}
-                    {#if turn.activityLog.length === 1}
-                      <div class="persisted-activity">
-                        <div class="activity-summary-static">
-                          <span class="activity-dot"></span>
-                          {lastEntry.text}
-                        </div>
-                      </div>
-                    {:else}
-                      <details
-                        class="persisted-activity"
-                        open={activityExpanded || undefined}
-                        ontoggle={(e) => {
-                          activityExpanded = e.currentTarget.open;
-                        }}
-                      >
-                        <summary>
-                          <span class="activity-dot"></span>
-                          {lastEntry.text}
-                          <span class="activity-chevron-icon">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                              <path d="M6 9l6 6 6-6" />
-                            </svg>
-                          </span>
-                        </summary>
-                        <div class="activity-log">
-                          {#each turn.activityLog as entry}
-                            <div class="activity-log-entry" class:nested={entry.nested}>
-                              {entry.text}
-                            </div>
-                          {/each}
-                        </div>
-                      </details>
-                    {/if}
-                  {:else if turn.statusText}
-                    <div class="persisted-activity">
-                      <div class="activity-summary-static">
-                        <span class="activity-dot"></span>
-                        {turn.statusText}
-                      </div>
-                    </div>
-                  {/if}
-                  {#if turn.revealedText}
-                    <div class="message-role">Assistant</div>
-                    <div class="message-text">{@html renderMessageText(turn.revealedText)}</div>
-                  {/if}
-                </div>
-              {/if}
 
               <!-- Geometry-based spacer: sizes itself so the last user message
                    can sit at the viewport top when scrolled to the bottom -->
