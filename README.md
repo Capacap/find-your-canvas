@@ -4,7 +4,7 @@ The hardest part of creating is knowing where to start.
 
 Find Your Canvas is an AI-powered creative workspace that helps users overcome blank canvas paralysis. A conversational orchestrator agent guides creative exploration through dialogue and visual experimentation, dispatching specialist subagents for image generation and editing.
 
-**Live at:** [findyourcanvas.com](https://findyourcanvas.com) (coming soon)
+**Live at:** [findyourcanvas.com](https://findyourcanvas.com)
 
 ## How it works
 
