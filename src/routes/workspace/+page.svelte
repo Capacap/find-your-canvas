@@ -3,6 +3,8 @@
   import { marked } from 'marked';
   import { onMount } from 'svelte';
   import { trackScroll } from '$lib/actions/trackScroll';
+
+  function autoFocus(node: HTMLElement) { node.focus(); }
   import Lightbox from '$lib/components/Lightbox.svelte';
   import InputArea from '$lib/components/InputArea.svelte';
   import DebugPanel from '$lib/components/DebugPanel.svelte';
@@ -398,7 +400,7 @@
   }
 
   // Send message
-  let inputArea: InputArea;
+  let inputArea: InputArea = $state() as InputArea;
 
   async function handleSend(text: string, files: File[]) {
     if (!text && files.length === 0) return;
@@ -650,7 +652,7 @@
                     if (e.key === 'Escape') cancelRenameProject();
                   }}
                   onblur={commitRenameProject}
-                  autofocus
+                  use:autoFocus
                 />
               {:else}
                 <button
@@ -721,7 +723,7 @@
                     if (e.key === 'Escape') cancelRenameConvo();
                   }}
                   onblur={commitRenameConvo}
-                  autofocus
+                  use:autoFocus
                 />
               {:else}
                 <button
@@ -1173,7 +1175,7 @@
                           if (e.key === 'Escape') cancelRenameImage();
                         }}
                         onblur={commitRenameImage}
-                        autofocus
+                        use:autoFocus
                       />
                     {:else}
                       <span class="gallery-label">{img.label}</span>
@@ -1223,7 +1225,7 @@
                           type="text"
                           bind:value={editingMemoryTitle}
                           onkeydown={(e) => { if (e.key === 'Escape') cancelEditMemory(); }}
-                          autofocus
+                          use:autoFocus
                         />
                         <textarea
                           class="memory-edit-content"

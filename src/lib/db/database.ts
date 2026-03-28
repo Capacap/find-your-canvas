@@ -21,7 +21,7 @@ class BananaDB extends Dexie {
   settings!: EntityTable<Settings, 'id'>;
 
   constructor() {
-    super('banana-orchestra');
+    super('find-your-canvas');
 
     this.version(1).stores({
       projects: 'id, updatedAt',

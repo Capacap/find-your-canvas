@@ -41,48 +41,54 @@
 
 <div class="landing" class:ready>
 
-  <header class="landing-header">
-    <span class="logo">Banana Orchestra</span>
-  </header>
+  <nav class="topbar">
+    <span class="topbar-logo"><span class="topbar-prefix">find your</span> <span class="topbar-name">Canvas</span></span>
+    <div class="topbar-links">
+      <a href="https://github.com/capacap/find-your-canvas" target="_blank" rel="noopener" class="topbar-link">GitHub</a>
+      {#if ready && hasKey}
+        <button class="topbar-cta" onclick={handleContinue}>Open workspace</button>
+      {/if}
+    </div>
+  </nav>
 
   <main class="hero">
-    <h1 class="hero-title">Creative vision,<br>orchestrated by AI</h1>
-    <p class="hero-subtitle">
-      A collaborative workspace where you direct and an ensemble of AI agents
-      compose, illustrate, and iterate alongside you.
-    </p>
+      <h1 class="hero-title">The hardest part of creating is knowing where to start.</h1>
+      <p class="hero-subtitle">
+        An AI partner that develops creative direction with you.
+        Explore ideas through conversation and visuals.
+      </p>
 
-    {#if ready}
-      <div class="hero-actions">
-        {#if hasKey && hasProjects}
-          <button class="btn-primary" onclick={handleContinue}>
-            Continue to workspace
-          </button>
-          <p class="hint">
-            {app.projects.length} project{app.projects.length === 1 ? '' : 's'} waiting
-          </p>
-        {:else if hasKey}
-          <button class="btn-primary" onclick={handleContinue}>
-            Open workspace
-          </button>
-        {:else}
-          <form class="key-form" onsubmit={(e) => { e.preventDefault(); handleGetStarted(); }}>
-            <input
-              type="password"
-              class="key-input"
-              placeholder="Gemini API key"
-              bind:value={apiKeyInput}
-            />
-            <button class="btn-primary" type="submit" disabled={!apiKeyInput.trim() || saving}>
-              {saving ? 'Starting...' : 'Get started'}
+      {#if ready}
+        <div class="hero-actions">
+          {#if hasKey && hasProjects}
+            <button class="btn-primary" onclick={handleContinue}>
+              Continue to workspace
             </button>
-          </form>
-          <p class="hint">
-            Your key stays in your browser. Nothing is sent to our servers.
-          </p>
-        {/if}
-      </div>
-    {/if}
+            <p class="hint">
+              {app.projects.length} project{app.projects.length === 1 ? '' : 's'} waiting
+            </p>
+          {:else if hasKey}
+            <button class="btn-primary" onclick={handleContinue}>
+              Open workspace
+            </button>
+          {:else}
+            <form class="key-form" onsubmit={(e) => { e.preventDefault(); handleGetStarted(); }}>
+              <input
+                type="password"
+                class="key-input"
+                placeholder="Gemini API key"
+                bind:value={apiKeyInput}
+              />
+              <button class="btn-primary" type="submit" disabled={!apiKeyInput.trim() || saving}>
+                {saving ? 'Starting...' : 'Get started'}
+              </button>
+            </form>
+            <p class="hint">
+              Your key stays in your browser. Nothing is sent to our servers.
+            </p>
+          {/if}
+        </div>
+      {/if}
   </main>
 
   <section class="features">
@@ -117,15 +123,63 @@
     opacity: 1;
   }
 
-  /* Header */
-  .landing-header {
-    padding: var(--space-6) var(--space-8);
+  /* Topbar */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-4) var(--space-8);
+    max-width: 960px;
+    margin: 0 auto;
+    width: 100%;
   }
-  .logo {
+  .topbar-logo {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.3em;
+  }
+  .topbar-prefix {
     font-family: var(--font-serif);
-    font-size: var(--text-lg);
+    font-size: var(--text-sm);
+    font-style: italic;
+    color: var(--color-text-tertiary);
+  }
+  .topbar-name {
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    font-weight: 600;
     color: var(--color-accent);
-    letter-spacing: 0.01em;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .topbar-links {
+    display: flex;
+    align-items: center;
+    gap: var(--space-5);
+  }
+  .topbar-link {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    text-decoration: none;
+    transition: color var(--transition-fast);
+  }
+  .topbar-link:hover {
+    color: var(--color-text);
+  }
+  .topbar-cta {
+    font-size: var(--text-sm);
+    font-weight: 500;
+    color: var(--color-accent);
+    background: none;
+    border: 1px solid var(--color-accent);
+    border-radius: var(--radius-md);
+    padding: var(--space-1) var(--space-4);
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
+  }
+  .topbar-cta:hover {
+    background: var(--color-accent);
+    color: var(--color-bg);
   }
 
   /* Hero */
@@ -137,14 +191,16 @@
     justify-content: center;
     text-align: center;
     padding: var(--space-12) var(--space-8);
-    max-width: 640px;
+    max-width: 800px;
     margin: 0 auto;
   }
+
+  /* Hero text */
   .hero-title {
     font-family: var(--font-serif);
-    font-size: 3rem;
+    font-size: 4rem;
     font-weight: 400;
-    line-height: 1.2;
+    line-height: 1.15;
     color: var(--color-text);
     margin: 0 0 var(--space-6);
   }
@@ -153,7 +209,7 @@
     color: var(--color-text-secondary);
     line-height: 1.6;
     margin: 0 0 var(--space-10);
-    max-width: 48ch;
+    max-width: 44ch;
   }
 
   /* Actions */
@@ -163,7 +219,7 @@
     align-items: center;
     gap: var(--space-4);
     width: 100%;
-    max-width: 400px;
+    max-width: 380px;
   }
 
   .key-form {
@@ -225,7 +281,6 @@
     padding: var(--space-12) var(--space-8);
     max-width: 960px;
     margin: 0 auto;
-    border-top: none;
   }
   .feature h3 {
     font-family: var(--font-serif);
