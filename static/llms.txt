@@ -1,0 +1,32 @@
+# Find Your Canvas
+
+> An AI-powered creative workspace that helps users overcome blank canvas paralysis. A conversational orchestrator agent guides creative exploration through dialogue and visual experimentation.
+
+Live at [findyourcanvas.com](https://findyourcanvas.com). Source on [GitHub](https://github.com/capacap/find-your-canvas).
+
+## What it does
+
+You talk to a single orchestrator agent about what you want to create. It develops creative direction with you, remembers your preferences across sessions, and dispatches specialist subagents when it's time to generate or edit images. The images are part of the exploration process: you generate to see, react, and refine direction.
+
+## Agent system
+
+- **Orchestrator**: Long-lived conversational agent that manages creative direction, project memory, and specialist dispatch via structured creative briefs.
+- **Text-to-image specialist**: Short-lived subagent that translates briefs into generation prompts and produces new images.
+- **Image-to-image specialist**: Short-lived subagent that edits existing images, decomposing complex edits into sequential atomic transformations.
+
+Agents share tools for image viewing, memory read/write, and search. The orchestrator dispatches specialists; specialists hand off results when done.
+
+## How it runs
+
+- Everything runs in the browser. No backend, no accounts.
+- Data is stored in IndexedDB via Dexie.
+- Requires a Gemini API key (entered on the landing page, stored locally, only sent to Google's API).
+- Built with SvelteKit 2, Svelte 5, TypeScript, and the Google Gemini API.
+
+## Context management
+
+Agents work within token-limited context windows using MRU (most-recently-used) queues: 30 recent images + 20 favorites in the visual index, 20 recent memory topics in the knowledge index. Search tools serve as escape hatches for older content.
+
+## License
+
+MIT
