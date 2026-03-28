@@ -904,15 +904,15 @@
                     {@const log = msg.activityLog}
                     {@const lastLogEntry = log[log.length - 1]}
                     {#if log.length === 1}
-                      <div class="persisted-activity">
-                        <div class="activity-summary-static">
+                      <div class="activity-section">
+                        <div class="activity-summary">
                           <span class="activity-dot" class:static={!msg.isLive}></span>
                           {lastLogEntry.text}
                         </div>
                       </div>
                     {:else}
                       <details
-                        class="persisted-activity"
+                        class="activity-section"
                         open={msg.isLive ? (activityExpanded || undefined) : (isLastAssistant && !turn.isRunning && activityExpanded ? true : undefined)}
                         ontoggle={(e) => {
                           if (isLastAssistant && !turn.isRunning) activityExpanded = e.currentTarget.open;
@@ -937,8 +937,8 @@
                       </details>
                     {/if}
                   {:else if msg.isLive && turn.statusText}
-                    <div class="persisted-activity">
-                      <div class="activity-summary-static">
+                    <div class="activity-section">
+                      <div class="activity-summary">
                         <span class="activity-dot"></span>
                         {turn.statusText}
                       </div>
@@ -2256,14 +2256,14 @@
 
 
   /* Persisted activity log (above assistant messages) */
-  .persisted-activity {
+  .activity-section {
     font-family: var(--font-sans);
     font-size: var(--text-sm);
     color: var(--color-text-tertiary);
     margin-bottom: var(--space-2);
   }
 
-  .persisted-activity summary {
+  .activity-section summary {
     display: flex;
     align-items: center;
     gap: var(--space-2);
@@ -2271,20 +2271,20 @@
     list-style: none;
   }
 
-  .persisted-activity summary::-webkit-details-marker {
+  .activity-section summary::-webkit-details-marker {
     display: none;
   }
 
-  .persisted-activity summary::marker {
+  .activity-section summary::marker {
     display: none;
     content: '';
   }
 
-  .persisted-activity summary:hover {
+  .activity-section summary:hover {
     color: var(--color-text-secondary);
   }
 
-  .activity-summary-static {
+  .activity-summary {
     display: flex;
     align-items: center;
     gap: var(--space-2);
@@ -2296,7 +2296,7 @@
     transform: rotate(-90deg);
   }
 
-  .persisted-activity[open] .activity-chevron-icon {
+  .activity-section[open] .activity-chevron-icon {
     transform: rotate(0deg);
   }
 

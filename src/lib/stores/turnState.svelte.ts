@@ -552,11 +552,10 @@ export async function sendMessage(opts: SendOptions): Promise<boolean> {
       retryInput = '';
       retryImageIds = [];
 
-      // Refresh all stores while isRunning is still true.
-      // displayMessages continues showing the live entry until
-      // isRunning flips to false, at which point the persisted
-      // message (now in app.messages) takes over at the same
-      // array index. No DOM swap, no settle mechanism.
+      // Refresh all stores while isRunning is still true so
+      // consumers see consistent state through the transition.
+      // When isRunning flips to false (in finally), the persisted
+      // message is already in app.messages.
       if (getAppState().currentConversation?.id === conversationId) {
         await Promise.all([
           refreshConversation(),
