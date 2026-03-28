@@ -84,7 +84,7 @@
               </button>
             </form>
             <p class="hint">
-              Your key stays in your browser. Nothing is sent to our servers.
+              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" class="hint-link">Get an API key</a> · Your key stays in your browser, never sent to our servers.
             </p>
           {/if}
         </div>
@@ -271,6 +271,14 @@
     font-size: var(--text-sm);
     color: var(--color-text-tertiary);
     margin: 0;
+  }
+  .hint-link {
+    color: var(--color-accent);
+    text-decoration: none;
+    transition: color var(--transition-fast);
+  }
+  .hint-link:hover {
+    color: var(--color-accent-hover);
   }
 
   /* Features */
